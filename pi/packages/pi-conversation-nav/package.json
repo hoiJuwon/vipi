@@ -1,0 +1,14 @@
+{
+  "name": "pi-conversation-nav",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vim-triggered navigation to the latest assistant response boundaries in tmux scrollback",
+  "keywords": ["pi-package", "pi-extension", "tmux", "navigation"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

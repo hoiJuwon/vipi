@@ -1,0 +1,14 @@
+{
+  "name": "pi-activity-line",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A refined one-line live activity indicator for Pi",
+  "keywords": ["pi-package", "pi-extension", "activity", "status"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

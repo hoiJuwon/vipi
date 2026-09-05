@@ -1,0 +1,14 @@
+machine.local.json
+node_modules/
+__pycache__/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+*.key
+auth.json
+mcp-oauth-credentials.json
+*.log
+backups/

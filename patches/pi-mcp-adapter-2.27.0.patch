@@ -1,0 +1,157 @@
+--- a/index.ts
++++ b/index.ts
+@@ -18,6 +18,7 @@
+ import { toolErrorOverride } from "./error-signal.ts";
+ import { createMcpRuntimeOwner, createOwnedUi, isAbortError, type McpRuntimeOwner } from "./runtime-owner.ts";
+ import { publishMcpStatusShutdown } from "./mcp-status.ts";
++import { clearMcpPermissionWaiting } from "./permission-state.ts";
+ import { runMcpScript } from "./mcp-code.ts";
+ import { cleanupMaterializedBinaryResources } from "./tool-registrar.ts";
+ 
+@@ -449,6 +450,7 @@
+   }
+ 
+   pi.on("session_start", async (_event, ctx) => {
++    clearMcpPermissionWaiting();
+     const generation = ++lifecycleGeneration;
+     const previousState = state;
+     const previousOwner = currentOwner;
+@@ -489,6 +491,7 @@
+   });
+ 
+   pi.on("input", async () => {
++    clearMcpPermissionWaiting();
+     const inputOwner = currentOwner;
+     if (!inputOwner?.isActive()) return;
+ 
+@@ -511,7 +514,13 @@
+     }
+   });
+ 
++  pi.on("agent_start", clearMcpPermissionWaiting);
++  pi.on("agent_end", clearMcpPermissionWaiting);
++  pi.on("tool_execution_start", clearMcpPermissionWaiting);
++  pi.on("tool_execution_end", clearMcpPermissionWaiting);
++
+   pi.on("session_shutdown", async () => {
++    clearMcpPermissionWaiting();
+     ++lifecycleGeneration;
+     const currentState = state;
+     const owner = currentOwner;
+--- a/tool-approval.ts
++++ b/tool-approval.ts
+@@ -1,6 +1,7 @@
+ import { createHash, randomUUID } from "node:crypto";
+ import { abortable } from "./abort.ts";
+ import { combineAbortSignals } from "./runtime-owner.ts";
++import { withMcpPermissionWaiting } from "./permission-state.ts";
+ import type { McpExtensionState } from "./state.ts";
+ import {
+   getToolNameCandidates,
+@@ -176,13 +177,13 @@
+   const preview = sanitized.length > 500 ? `${sanitized.slice(0, 500)}...` : sanitized;
+   const title = `MCP: ${sanitizeTerminalText(serverName)} wants to run ${sanitizeTerminalText(toolMeta.originalName)}`;
+   const ownedSignal = combineAbortSignals(state.owner?.signal, signal);
+-  const decision = await abortable(
++  const decision = await withMcpPermissionWaiting(() => abortable(
+     state.ui.select(
+       `${title}\n\nArguments:\n${preview}`,
+       ["Allow once", "Allow for session", "Deny"],
+     ),
+     ownedSignal,
+-  );
++  ));
+ 
+   if (decision === "Allow once") {
+     return { ok: true };
+--- a/elicitation-handler.ts
++++ b/elicitation-handler.ts
+@@ -1,4 +1,7 @@
+ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
++import { existsSync } from "node:fs";
++import { homedir } from "node:os";
++import { join } from "node:path";
+ import type { Client } from "@modelcontextprotocol/client";
+ import {
+   ProtocolError,
+@@ -11,6 +14,7 @@
+ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
+ import type { JsonSchemaType } from "@modelcontextprotocol/client";
+ import open from "open";
++import { withMcpPermissionWaiting } from "./permission-state.ts";
+ 
+ export type ElicitationValue = string | number | boolean | string[] | undefined;
+ type FormProperty = ElicitRequestFormParams["requestedSchema"]["properties"][string];
+@@ -36,9 +40,9 @@
+   options: ElicitationHandlerOptions,
+   request: ElicitRequest,
+ ): Promise<ElicitResult> {
+-  return request.params.mode === "url"
++  return withMcpPermissionWaiting(() => request.params.mode === "url"
+     ? handleUrlElicitation(options, request.params)
+-    : handleFormElicitation(options, request.params);
++    : handleFormElicitation(options, request.params));
+ }
+ 
+ export async function handleFormElicitation(
+@@ -46,6 +50,9 @@
+   params: ElicitRequestFormParams,
+ ): Promise<ElicitResult> {
+   const properties = Object.entries(params.requestedSchema.properties);
++  if (shouldAutoApproveComputerUse(options.serverName, params.message, properties.length)) {
++    return { action: "accept", content: {} };
++  }
+   const decision = await options.ui.select(
+     `MCP Input Request\nServer: ${options.serverName}\n\n${params.message}`,
+     ["Continue", "Decline"],
+@@ -343,6 +350,13 @@
+   return { action: "accept" };
+ }
+ 
++function shouldAutoApproveComputerUse(serverName: string, message: string, propertyCount: number): boolean {
++  if (propertyCount !== 0 || !["computer-use", "sky-node-repl"].includes(serverName)) return false;
++  if (!/^Allow (?:Codex|Computer Use) to use .+\?$/u.test(message.trim())) return false;
++  const agentDir = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
++  return existsSync(join(agentDir, "computer-use-full-access"));
++}
++
+ function humanizeName(name: string): string {
+   return name.replace(/[_-]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, char => char.toUpperCase());
+ }
+--- /dev/null
++++ b/permission-state.ts
+@@ -0,0 +1,34 @@
++import { spawnSync } from "node:child_process";
++
++const paneId = process.env.TMUX_PANE;
++let waitingDepth = 0;
++
++function publish(waiting: boolean): void {
++  if (!paneId || !process.env.TMUX) return;
++  try {
++    const value = waiting ? `mcp:${process.pid}` : "0";
++    spawnSync("tmux", ["set-option", "-p", "-t", paneId, "@pi_permission_waiting", value], {
++      stdio: "ignore",
++      timeout: 250,
++    });
++  } catch {
++    // Permission UI must remain usable even if tmux state publication fails.
++  }
++}
++
++/** Publish the lifecycle of a real MCP interaction, never inferred screen text. */
++export function clearMcpPermissionWaiting(): void {
++  waitingDepth = 0;
++  publish(false);
++}
++
++export async function withMcpPermissionWaiting<T>(operation: () => Promise<T>): Promise<T> {
++  waitingDepth += 1;
++  if (waitingDepth === 1) publish(true);
++  try {
++    return await operation();
++  } finally {
++    waitingDepth = Math.max(0, waitingDepth - 1);
++    if (waitingDepth === 0) publish(false);
++  }
++}

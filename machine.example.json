@@ -1,0 +1,5 @@
+{
+  "tailscaleIp": "100.x.y.z",
+  "remoteMac": "your-macbook-ssh-alias",
+  "remoteHostname": "Your-MacBook.local"
+}

@@ -1,0 +1,5 @@
+#!/bin/sh
+exec /Applications/ChatGPT.app/Contents/Resources/codex sandbox \
+  -P :danger-full-access \
+  --allow-unix-socket "$HOME/Library/Group Containers/2DC432GLL2.com.openai.sky.CUAService/IPC" \
+  /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl

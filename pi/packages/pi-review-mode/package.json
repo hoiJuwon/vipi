@@ -1,0 +1,10 @@
+{
+  "name": "pi-review-mode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Turns Pi-Vim Normal mode into tmux transcript review mode",
+  "keywords": ["pi-package", "pi-extension", "vim", "tmux", "review"],
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" }
+}

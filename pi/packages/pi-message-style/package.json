@@ -1,0 +1,10 @@
+{
+  "name": "pi-message-style",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal user-message prompt styling for Pi",
+  "keywords": ["pi-package", "pi-extension", "message", "style"],
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": { "@earendil-works/pi-coding-agent": "*" }
+}

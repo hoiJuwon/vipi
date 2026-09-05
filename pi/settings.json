@@ -1,0 +1,49 @@
+{
+  "enableInstallTelemetry": false,
+  "defaultProjectTrust": "always",
+  "theme": "vim-default",
+  "tuiMode": "regular",
+  "outputPad": 0,
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-astra",
+  "defaultThinkingLevel": "medium",
+  "hideThinkingBlock": true,
+  "transport": "sse",
+  "piVim": {
+    "clipboardMirror": "yank",
+    "modeColors": {
+      "insert": "borderMuted",
+      "normal": "borderAccent",
+      "visual": "customMessageLabel",
+      "ex": "warning"
+    },
+    "borderSync": {
+      "insert": "mode",
+      "normal": "mode",
+      "visual": "mode",
+      "ex": "mode"
+    },
+    "labelSync": {
+      "insert": "mode",
+      "normal": "mode",
+      "visual": "mode",
+      "ex": "mode"
+    }
+  },
+  "packages": [
+    "npm:pi-mcp-adapter@2.27.0",
+    "packages/pi-clean-footer",
+    "packages/pi-vim-local",
+    "packages/pi-session-tree",
+    "packages/pi-conversation-nav",
+    "packages/pi-review-mode",
+    "packages/pi-activity-line",
+    "npm:@pi-kaush/pi-response-style@0.1.2",
+    "npm:@zigai/pi-message-highlights@0.6.2",
+    "packages/pi-message-style",
+    "@VIPI_IOS@",
+    "npm:pi-codex-image-gen@0.1.12",
+    "npm:pi-schedule-prompt",
+    "git:github.com/DietrichGebert/ponytail@v4.9.0"
+  ]
+}
