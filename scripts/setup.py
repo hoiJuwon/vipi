@@ -45,6 +45,7 @@ def install(dest, text=None, source=None):
 for folder in ['packages', 'themes', 'response-styles']:
     for source in (ROOT / 'pi' / folder).iterdir():
         install(agent / folder / source.name, source=source)
+install(home / '.local/bin/vipi', source=ROOT / 'scripts/vipi')
 settings_path = agent / 'settings.json'
 settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
 defaults = json.loads((ROOT / 'pi/settings.json').read_text())

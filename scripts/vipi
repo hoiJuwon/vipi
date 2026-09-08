@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""Durable Pi workspace manifest + tmux entrypoint. Never replay shell commands."""
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+STATE = Path(os.environ.get('VIPI_STATE_DIR', str(HOME / '.local/state/vipi/workspace')))
+AGENT = HOME / '.pi/agent'
+MANIFEST = STATE / 'workspace.json'
+SOCKET = os.environ.get('VIPI_TMUX_SOCKET')
+
+
+def tmux(*args, check=True):
+    cmd = ['tmux'] + (['-L', SOCKET] if SOCKET else []) + list(map(str, args))
+    result = subprocess.run(cmd, text=True, capture_output=True, timeout=15)
+    if check and result.returncode:
+        raise RuntimeError(result.stderr.strip() or 'tmux failed')
+    return result
+
+
+def read_json(path, fallback):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return fallback
+
+
+def atomic_json(path, data, compact=False):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + f'.{os.getpid()}.tmp')
+    with open(tmp, 'w', encoding='utf8') as f:
+        os.chmod(tmp, 0o600)
+        json.dump(data, f, ensure_ascii=False, indent=None if compact else 2)
+        f.write('\n')
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def lock(name, blocking=True):
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(STATE / name, 'a') as f:
+        os.chmod(f.name, 0o600)
+        fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        yield
+
+
+def panes():
+    keys = ['session_name', 'window_id', 'window_index', 'pane_id', 'pane_pid',
+            'pane_current_command', 'pane_current_path', 'window_active', 'pane_active',
+            'window_width', 'window_height', '@pi_session_tree', '@pi_session_tree_root',
+            '@vipi_session_file', '@vipi_restore_id']
+    fmt = '\t'.join('#{' + k + '}' for k in keys)
+    result = tmux('list-panes', '-a', '-F', fmt, check=False)
+    return [dict(zip(keys, line.split('\t'))) for line in result.stdout.splitlines()]
+
+
+def registry():
+    return read_json(AGENT / 'tmux-session-tree.json', {'entries': []})['entries']
+
+
+def header(path):
+    if not path:
+        return None
+    try:
+        with open(path, encoding='utf8') as f:
+            value = json.loads(f.readline())
+        return value if value.get('type') == 'session' and value.get('id') else None
+    except (OSError, ValueError):
+        return None
+
+
+def collect(live, entries, session, previous=None):
+    """Match registry PID to pane PID (or descendants), not recycled pane IDs alone."""
+    ps = subprocess.run(['ps', '-axo', 'pid=,ppid='], capture_output=True, text=True, check=True)
+    parents = dict(line.split() for line in ps.stdout.splitlines() if len(line.split()) == 2)
+    def belongs(pid, pane_pid):
+        pid = str(pid)
+        seen = set()
+        while pid and pid not in seen:
+            if pid == pane_pid:
+                return True
+            seen.add(pid)
+            pid = parents.get(pid)
+        return False
+    records, warnings, selected, seen = [], [], None, set()
+    relevant = [p for p in live if p['session_name'] == session]
+    for p in relevant:
+        if p['@pi_session_tree'] == '1':
+            continue
+        matches = [e for e in entries if e.get('tmuxPaneId') == p['pane_id']
+                   and belongs(e.get('pid'), p['pane_pid'])]
+        prior = next((r for r in (previous or []) if r['id'] == p['@vipi_restore_id']), {})
+        e = matches[-1] if matches else {}
+        file = e.get('sessionFile') or p['@vipi_session_file']
+        if not file:
+            if p['pane_current_command'] not in ('zsh', 'bash', 'sh', 'fish', 'sleep'):
+                warnings.append(f"{p['pane_id']}: no registered session file ({p['pane_current_command']}); not recoverable yet")
+            continue
+        h = header(file)
+        identity = e.get('piSessionId') or (h or {}).get('id') or p['@vipi_restore_id']
+        if h and e.get('piSessionId') and h['id'] != e['piSessionId']:
+            warnings.append(f"{p['pane_id']}: session ID mismatch; skipped")
+            continue
+        if file in seen:
+            continue
+        seen.add(file)
+        trees = [x for x in relevant if x['window_id'] == p['window_id'] and x['@pi_session_tree'] == '1']
+        title_entry = next((x for x in entries if x.get('sessionFile') == file and x.get('name')), {})
+        records.append({'id': identity, 'file': file, 'cwd': e.get('cwd') or p['pane_current_path'],
+                        'name': e.get('name') or title_entry.get('name') or prior.get('name') or 'Pi', 'window': int(p['window_index']),
+                        'tree': bool(trees), 'root': trees[0]['@pi_session_tree_root'] if trees else str(HOME),
+                        'available': bool(h)})
+        if not h:
+            warnings.append(f"{p['pane_id']}: missing/unflushed session file: {file}")
+        if p['window_active'] == '1' and (selected is None or p['pane_active'] == '1'):
+            selected = identity
+    return records, warnings, selected
+
+
+def checkpoint(session=None):
+    old = read_json(MANIFEST, {})
+    session = session or old.get('session', 'vipi')
+    live = panes()
+    if not any(p['session_name'] == session for p in live):
+        return old  # Never erase the last workspace during shutdown / server absence.
+    if tmux('show-options', '-v', '-t', session, '@vipi_restoring', check=False).stdout.strip() == '1':
+        return old
+    records, warnings, selected = collect(live, registry(), session, old.get('sessions', []))
+    if not records:
+        return old  # Startup registration may lag; preserve the known-good snapshot.
+    # Keep unavailable records across partial restoration without freezing future saves.
+    pending = old.get('pending', [])
+    records += [r for r in pending if not any(x['id'] == r['id'] for x in records)]
+    own = next(p for p in live if p['session_name'] == session)
+    data = {'version': 1, 'savedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
+            'session': session, 'selected': selected, 'width': int(own['window_width']),
+            'height': int(own['window_height']), 'sessions': records, 'warnings': warnings, 'pending': pending}
+    if old:
+        atomic_json(STATE / 'workspace.previous.json', old)
+    atomic_json(MANIFEST, data)
+    return data
+
+
+def command_for(record):
+    # Explicit whitelist: never execute pane_start_command, history, or old tool calls.
+    pi = shutil.which('pi')
+    if not pi:
+        raise RuntimeError('pi executable not found in PATH')
+    cmd = [pi, '--tui-mode', 'regular', '--session', record['file'], '--no-extensions']
+    # Saved cron jobs must not silently resume on reboot. Load the reviewed global
+    # package extensions explicitly, excluding the scheduler and project auto-load.
+    for source in read_json(AGENT / 'settings.json', {}).get('packages', []):
+        if not isinstance(source, str):
+            raise RuntimeError('Filtered package objects need explicit restore support before launch')
+        if source.startswith('npm:pi-schedule-prompt'):
+            continue
+        if not source.startswith(('npm:', 'git:', 'https:', 'ssh:')):
+            source = str((AGENT / Path(source).expanduser()).resolve())
+        cmd += ['-e', source]
+    if record.get('name') and record['name'] != 'Pi':
+        cmd += ['--name', record['name']]
+    return 'exec env VIPI_RESTORED=' + ('0 ' if record.get('fresh') else '1 ') + shlex.join(cmd)
+
+
+def ensure_tree(pane, root):
+    window = tmux('display-message', '-p', '-t', pane, '#{window_id}').stdout.strip()
+    if any(p['window_id'] == window and p['@pi_session_tree'] == '1' for p in panes()):
+        return
+    nvim = shutil.which('nvim')
+    if not nvim:
+        raise RuntimeError('nvim executable not found in PATH')
+    if not Path(root).is_dir():
+        root = str(HOME)
+    args = ['split-window', '-d', '-b', '-h', '-l', '45', '-t', pane, '-c', root]
+    for key, value in {'ROOT': root, 'REGISTRY': str(AGENT / 'tmux-session-tree.json'),
+                       'CATALOG': str(AGENT / 'tmux-session-catalog.json'),
+                       'WORKSPACES': str(AGENT / 'tmux-workspaces.json')}.items():
+        args += ['-e', f'PI_SESSION_TREE_{key}={value}']
+    tree = tmux(*args, '-P', '-F', '#{pane_id}',
+                'exec ' + shlex.join([nvim, '--clean', '-n', '-u', str(ROOT / 'pi/packages/pi-session-tree/tree.lua')])).stdout.strip()
+    for key, value in [('tree', '1'), ('tree_owner', pane), ('tree_root', root)]:
+        tmux('set-option', '-p', '-t', tree, '@pi_session_' + key, value)
+
+
+def start(session=None, no_tree=False):
+    data = read_json(MANIFEST, {})
+    session = session or data.get('session', 'vipi')
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', session):
+        raise RuntimeError('Use a tmux session name containing only letters, digits, _ or -')
+    live = panes()
+    exists = any(p['session_name'] == session for p in live)
+    incomplete = exists and (data.get('pending') or tmux('show-options', '-v', '-t', session, '@vipi_restoring', check=False).stdout.strip() == '1')
+    if exists and not incomplete:
+        # Adopt existing workspace without moving/killing any of its panes.
+        snapshot = checkpoint(session)
+        if not no_tree:
+            candidates = [p for p in live if p['session_name'] == session and p['@pi_session_tree'] != '1'
+                          and (p['window_active'] == '1')]
+            if candidates and snapshot.get('sessions'):
+                ensure_tree(candidates[0]['pane_id'], str(HOME))
+        checkpoint(session)
+        return session
+    records = data.get('sessions', [])
+    if not records:
+        folder = AGENT / 'sessions' / '--vipi-start--'
+        import uuid
+        identity = str(uuid.uuid4())
+        file = folder / (identity + '.jsonl')
+        # This is a new file owned by the launcher, not an in-memory Pi's unflushed path.
+        atomic_json(file, {'type': 'session', 'version': 3, 'id': identity,
+                          'timestamp': dt.datetime.now(dt.timezone.utc).isoformat(), 'cwd': str(Path.cwd())}, compact=True)
+        records = [{'id': identity, 'file': str(file), 'cwd': str(Path.cwd()), 'name': 'Pi', 'tree': True, 'root': str(HOME), 'fresh': True}]
+        data = {'version': 1, 'session': session, 'sessions': records, 'selected': identity}
+        atomic_json(MANIFEST, data)
+    errors = []
+    pending = []
+    valid = []
+    for r in records:
+        h = header(r['file'])
+        if not h or h['id'] != r['id'] or not Path(r['cwd']).is_dir():
+            errors.append(f"Cannot restore {r.get('name')}: missing/invalid session file or cwd ({r['file']})")
+            pending.append(r)
+        else:
+            command_for(r)  # Validate executable before creating the tmux workspace.
+            valid.append(r)
+    if not valid:
+        raise RuntimeError('No recoverable sessions. Snapshot retained.\n' + '\n'.join(errors))
+    if not exists:
+        first = tmux('new-session', '-d', '-s', session, '-x', max(100, data.get('width', 180)),
+                     '-y', max(24, data.get('height', 45)), '-P', '-F', '#{pane_id}', 'sleep 86400').stdout.strip()
+        tmux('set-option', '-p', '-t', first, '@vipi_placeholder', '1')
+    tmux('set-option', '-t', session, '@vipi_restoring', '1')
+    selected = None
+    for r in valid:
+        live = panes()
+        matching = [p for p in live if p['session_name'] == session and p['@vipi_restore_id'] == r['id']]
+        if matching:
+            pane = matching[0]['pane_id']
+        else:
+            # Also protect conversations already active in a different managed workspace.
+            other_records = [e for e in registry() if e.get('sessionFile') == r['file']
+                             and any(p['pane_id'] == e.get('tmuxPaneId') and p['pane_pid'] == str(e.get('pid')) for p in live)]
+            if other_records:
+                errors.append(f"Already active elsewhere, skipped: {r.get('name')}")
+                continue
+            placeholders = tmux('list-panes', '-s', '-t', session, '-F', '#{pane_id}\t#{@vipi_placeholder}').stdout
+            pane = next((line.split('\t')[0] for line in placeholders.splitlines() if line.endswith('\t1')), None)
+            if pane is None:
+                pane = tmux('new-window', '-d', '-t', session + ':', '-c', r['cwd'], '-P', '-F', '#{pane_id}', 'sleep 86400').stdout.strip()
+            tmux('set-option', '-p', '-t', pane, '@vipi_placeholder', '0')
+            tmux('respawn-pane', '-k', '-t', pane, '-c', r['cwd'], command_for(r))
+            tmux('set-option', '-p', '-t', pane, '@vipi_session_file', r['file'])
+            tmux('set-option', '-p', '-t', pane, '@vipi_restore_id', r['id'])
+            tmux('rename-window', '-t', pane, r.get('name', 'Pi'))
+            if not no_tree:
+                # Stagger startups so shared registry read/modify/write cycles do
+                # not race all restored Pi processes at once. Timeout is visible.
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if any(e.get('piSessionId') == r['id'] and e.get('tmuxPaneId') == pane for e in registry()):
+                        break
+                    time.sleep(0.2)
+                else:
+                    errors.append(f"Pi startup registration timed out: {r.get('name')}; inspect its pane")
+        if not no_tree and r.get('tree', True):
+            ensure_tree(pane, r.get('root') or str(HOME))
+        if selected is None or r['id'] == data.get('selected'):
+            selected = pane
+    if selected:
+        if not no_tree:
+            ensure_tree(selected, str(HOME))
+        tmux('select-window', '-t', selected)
+        tmux('select-pane', '-t', selected)
+    # Preserve unavailable conversations and retry them on the next explicit start.
+    data['pending'] = pending
+    data['warnings'] = errors
+    data['session'] = session
+    atomic_json(MANIFEST, data)
+    tmux('set-option', '-t', session, '@vipi_restoring', '0')
+    for error in errors:
+        print(error, file=sys.stderr)
+    atomic_json(STATE / 'last-restore.json', {'at': dt.datetime.now(dt.timezone.utc).isoformat(), 'errors': errors})
+    return session
+
+
+def ensure_watcher():
+    # The OS lock is authoritative, so stale PIDs after reboot cannot block startup.
+    try:
+        with lock('watch.lock', blocking=False):
+            pass
+    except BlockingIOError:
+        return
+    with open(STATE / 'watch.log', 'a') as log:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'watch'],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                         env={**os.environ, 'VIPI_WATCH_NO_RESTORE': '1'})
+
+
+def watch():
+    try:
+        with lock('watch.lock', blocking=False):
+            if os.environ.get('VIPI_WATCH_NO_RESTORE') != '1':
+                with lock('workspace.lock'):
+                    start()
+            while True:
+                try:
+                    with lock('workspace.lock'):
+                        checkpoint()
+                except Exception as error:
+                    print(str(error), file=sys.stderr, flush=True)
+                time.sleep(15)
+    except BlockingIOError:
+        return
+
+
+def install_autostart():
+    if sys.platform != 'darwin':
+        raise RuntimeError('Login autostart is currently supported on macOS only')
+    dest = HOME / 'Library/LaunchAgents/dev.vipi.workspace.plist'
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(HOME)}
+    payload = {'Label': 'dev.vipi.workspace', 'ProgramArguments': [sys.executable, str(Path(__file__).resolve()), 'watch'],
+               'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False}, 'ThrottleInterval': 30,
+               'EnvironmentVariables': env, 'StandardOutPath': str(STATE / 'launchd.log'),
+               'StandardErrorPath': str(STATE / 'launchd.log')}
+    dest.write_bytes(plistlib.dumps(payload))
+    result = subprocess.run(['launchctl', 'bootstrap', f'gui/{os.getuid()}', str(dest)], capture_output=True, text=True)
+    print('Login autostart file installed:', dest)
+    if result.returncode:
+        print('Could not activate in current GUI domain; takes effect at next GUI login:', result.stderr.strip())
+
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['start', 'save', 'status', 'watch', 'install-autostart'])
+    parser.add_argument('--session', help='Adopt an existing tmux session (e.g. base)')
+    parser.add_argument('--detached', action='store_true', help='Restore without attaching')
+    parser.add_argument('--no-tree', action='store_true', help='Do not create tree panes (testing/headless)')
+    args = parser.parse_args()
+    if args.command == 'watch':
+        watch()
+        return
+    with lock('workspace.lock'):
+        if args.command == 'start':
+            session = start(args.session, args.no_tree)
+        elif args.command == 'save':
+            data = checkpoint(args.session)
+            print(json.dumps({'file': str(MANIFEST), 'recorded': len(data.get('sessions', [])),
+                              'recoverable': sum(bool(header(r['file'])) for r in data.get('sessions', [])),
+                              'warnings': data.get('warnings', [])}, ensure_ascii=False, indent=2))
+        elif args.command == 'status':
+            data = read_json(MANIFEST, {})
+            print(json.dumps({'file': str(MANIFEST), **data}, ensure_ascii=False, indent=2))
+        elif args.command == 'install-autostart':
+            install_autostart()
+    if args.command == 'start':
+        ensure_watcher()
+        print('Workspace ready:', session)
+        if not args.detached:
+            cmd = ['tmux'] + (['-L', SOCKET] if SOCKET else [])
+            cmd += ['switch-client' if os.environ.get('TMUX') else 'attach-session', '-t', session]
+            os.execvp(cmd[0], cmd)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+        print('vipi:', error, file=sys.stderr)
+        sys.exit(1)

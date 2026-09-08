@@ -67,6 +67,17 @@ pi --model openai-codex/gpt-6-astra --thinking medium -p --no-session 'Reply onl
 
 열려 있던 Pi는 사용자가 유휴 상태에서 `/reload`한다. 새 세션은 새 설정을 읽는다. 기존 대화에 저장된 모델/모드는 새 기본값과 다를 수 있다.
 
+## 재부팅 후에도 같은 작업 공간으로 들어가기
+
+```bash
+vipi start                         # 기존 tmux 접속 / 없으면 Pi 대화 + 트리 복원
+vipi save                          # 즉시 저장 (평소에는 15초마다 자동 저장)
+vipi status                        # 복구 가능 세션과 누락 확인
+vipi install-autostart             # macOS 로그인 시 자동 복원 등록
+```
+
+최초 기존 `base`를 채택하려면 `vipi start --session base --detached`. `~/.local/bin`이 PATH에 있어야 한다. **실행 중 명령과 미전송 입력은 복원하지 않으며, 저장 파일이 없는 pane은 경고한다.** 복원 시 예약 프롬프트의 자동 실행을 막기 위해 scheduler와 프로젝트 확장 자동 로딩을 제외한다. 사용법·저장 경로·복구 누락·FileVault·자동 시작 해제·테스트는 [workspace 가이드](docs/workspace.md)를 읽는다.
+
 ## 2. 포함된 동작
 
 | 영역 | 설정 |

@@ -4363,6 +4363,9 @@ export default function (pi: ExtensionAPI) {
             ...pi.getCommands().map((command) => command.name),
           ]),
       );
+      // A restored workspace starts idle in NORMAL; no tmux keystroke is sent
+      // to a live agent or pending tool call. Ordinary/new tree sessions stay INSERT.
+      if (process.env.VIPI_RESTORED === "1") editor.handleInput("\x1b");
       return editor;
     });
   });
