@@ -18,8 +18,8 @@ const WORKSPACE_PATH = join(homedir(), ".pi", "agent", "tmux-workspaces.json");
 const TREE_INIT_PATH = fileURLToPath(new URL("./tree.lua", import.meta.url));
 const SIDEBAR_WIDTH = "45";
 const NAME_MODEL_PROVIDER = "openai-codex";
-const NAME_MODEL_ID = "gpt-5.4-mini";
-const NAME_TIMEOUT_MS = 15_000;
+const NAME_MODEL_ID = "gpt-6-astra";
+const NAME_TIMEOUT_MS = 30_000;
 const MAX_TOPIC_CHARS = 8;
 const MAX_SUMMARY_CHARS = 20;
 
@@ -115,10 +115,14 @@ export function normalizeSessionTitle(candidate: string): string | undefined {
   return topic && summary ? `${topic} / ${summary}` : undefined;
 }
 
-export function deriveSessionTitle(prompt: string): string | undefined {
-  const singleLine = cleanNamePart(prompt, MAX_SUMMARY_CHARS);
-  if (!singleLine) return undefined;
-  return `${inferTopic(prompt)} / ${singleLine}`;
+function firstUserPrompt(ctx: ExtensionContext): string | undefined {
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message" || entry.message.role !== "user") continue;
+    const content = entry.message.content;
+    const text = typeof content === "string" ? content : responseText(content);
+    if (text.trim()) return text;
+  }
+  return undefined;
 }
 
 function titleParts(name: string | undefined): { topic: string; summary: string } | undefined {
@@ -314,23 +318,19 @@ export default function sessionTree(pi: ExtensionAPI) {
   async function generateAiTitle(
     prompt: string,
     topic: string,
-    fallbackSummary: string,
     sessionId: string,
     ctx: ExtensionContext,
   ): Promise<void> {
-    const preferred = ctx.modelRegistry.find(NAME_MODEL_PROVIDER, NAME_MODEL_ID);
-    const model = preferred && ctx.modelRegistry.hasConfiguredAuth(preferred) ? preferred : ctx.model;
-    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
-      if (ctx.sessionManager.getSessionId() === sessionId && !normalizeSessionTitle(pi.getSessionName() ?? "")) {
-        pi.setSessionName(`${topic} / ${fallbackSummary}`);
-      }
-      return;
-    }
-
+    const originalName = pi.getSessionName();
+    const registryName = () => loadRegistry(REGISTRY_PATH).find((entry) => entry.piSessionId === sessionId)?.name;
+    const originalRegistryName = registryName();
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), NAME_TIMEOUT_MS);
     timeout.unref?.();
     try {
+      const preferred = ctx.modelRegistry.find(NAME_MODEL_PROVIDER, NAME_MODEL_ID);
+      const model = preferred && ctx.modelRegistry.hasConfiguredAuth(preferred) ? preferred : ctx.model;
+      if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) throw new Error("제목 생성 모델 인증 없음");
       const response = await ctx.modelRegistry.complete(
         model,
         {
@@ -345,24 +345,34 @@ export default function sessionTree(pi: ExtensionAPI) {
           }],
         },
         {
-          maxTokens: 128,
-          reasoning: "minimal",
+          maxTokens: 512,
+          reasoningEffort: "low",
+          transport: "sse",
           signal: abortController.signal,
           cacheRetention: "none",
           sessionId: randomUUID(),
         },
       );
+      // Provider failures can resolve normally with stopReason=error and no text.
+      if (response.stopReason !== "stop") throw new Error(response.errorMessage || `제목 생성 ${response.stopReason}`);
       const rawGenerated = responseText(response.content);
       const generated = rawGenerated.includes("/") ? "" : cleanNamePart(rawGenerated, MAX_SUMMARY_CHARS);
-      if (generated) fallbackSummary = generated;
-    } catch {
-      // Fall through to the deterministic summary; naming must never disturb chat.
+      if (Array.from(generated).length < 2) throw new Error("유효한 제목 요약 없음");
+      // Manual /name, tree r, or switching sessions while awaiting must win.
+      if (ctx.sessionManager.getSessionId() !== sessionId || pi.getSessionName() !== originalName
+          || registryName() !== originalRegistryName) return;
+      pi.setSessionName(`${topic} / ${generated}`);
+    } catch (error) {
+      if (ctx.sessionManager.getSessionId() === sessionId && ctx.hasUI) {
+        const reason = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`세션 제목 요약 실패: ${reason.slice(0, 240)}. /retitle로 재시도할 수 있습니다.`, "warning");
+      }
+      // Never lock a truncated prompt as a completed summary. An unnamed session
+      // retries its FIRST request on the next turn, not the latest conversation.
     } finally {
       clearTimeout(timeout);
+      namingSessions.delete(sessionId);
     }
-
-    if (ctx.sessionManager.getSessionId() !== sessionId || normalizeSessionTitle(pi.getSessionName() ?? "")) return;
-    pi.setSessionName(`${topic} / ${fallbackSummary}`);
   }
 
   function syncNameFromRegistry(ctx: ExtensionContext): string | undefined {
@@ -430,14 +440,13 @@ export default function sessionTree(pi: ExtensionAPI) {
     const existing = registry.find((entry) => entry.piSessionId === sessionId);
     if (existing?.named || normalizeSessionTitle(pi.getSessionName() ?? "") || namingSessions.has(sessionId)) return;
 
-    const fallback = deriveSessionTitle(event.prompt);
-    const fallbackParts = titleParts(fallback);
-    if (!fallbackParts) return;
-    const topic = existing?.topic ?? fallbackParts.topic;
+    const prompt = firstUserPrompt(ctx) ?? event.prompt;
+    if (!prompt.trim()) return;
+    const topic = existing?.topic ?? inferTopic(prompt);
     namingSessions.add(sessionId);
 
     // Persist the initial classification immediately, but set the actual name
-    // only once when AI summary generation succeeds or falls back.
+    // only when AI summary generation succeeds.
     if (existing) {
       saveRegistry(
         REGISTRY_PATH,
@@ -446,7 +455,21 @@ export default function sessionTree(pi: ExtensionAPI) {
           : entry),
       );
     }
-    void generateAiTitle(event.prompt, topic, fallbackParts.summary, sessionId, ctx);
+    void generateAiTitle(prompt, topic, sessionId, ctx);
+  });
+
+  pi.registerCommand("retitle", {
+    description: "Regenerate a short Korean session title from the first user request",
+    handler: async (_args, ctx) => {
+      const prompt = firstUserPrompt(ctx);
+      if (!prompt) return ctx.ui.notify("요약할 사용자 메시지가 없습니다.", "warning");
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (namingSessions.has(sessionId)) return ctx.ui.notify("이미 제목을 요약 중입니다.", "info");
+      const existing = loadRegistry(REGISTRY_PATH).find((entry) => entry.piSessionId === sessionId);
+      const topic = existing?.topic ?? titleParts(pi.getSessionName())?.topic ?? inferTopic(prompt);
+      namingSessions.add(sessionId);
+      await generateAiTitle(prompt, topic, sessionId, ctx);
+    },
   });
 
   pi.on("session_shutdown", () => {
