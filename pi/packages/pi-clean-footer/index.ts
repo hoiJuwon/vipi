@@ -1,8 +1,9 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { installCodexAccounts } from "../pi-codex-accounts/index";
 
 const USAGE_PATH = resolve(homedir(), ".pi", "agent", "codex-weekly-usage.json");
 const WEEK_MINUTES = 7 * 24 * 60;
@@ -102,6 +103,21 @@ export default function cleanFooter(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
+    // Pre-existing restored Pi processes have a frozen --no-extensions/-e list.
+    // /reload updates this footer but cannot add the newly installed account package.
+    let accountsEnabled = false;
+    try {
+      const settings = JSON.parse(readFileSync(resolve(getAgentDir(), "settings.json"), "utf8"));
+      accountsEnabled = settings.packages?.some((source: unknown) => typeof source === "string" && source.endsWith("/pi-codex-accounts")) === true;
+    } catch {}
+    if (accountsEnabled && !ctx.modelRegistry.getRegisteredNativeProvider("openai-codex-2")) {
+      try {
+        const start = await installCodexAccounts(pi);
+        start();
+      } catch {
+        ctx.ui.notify("Codex 계정 확장을 불러오지 못했습니다. 새 Pi에서 다시 확인하세요.", "warning");
+      }
+    }
     thinkingLevel = pi.getThinkingLevel();
     ctx.ui.setFooter((tui, theme) => {
       requestRender = () => tui.requestRender();

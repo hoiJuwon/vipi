@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import shlex
 import tempfile
 import time
 import uuid
@@ -19,6 +21,13 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    if '--legacy-cli' in sys.argv:
+        original_command = m.command_for
+        def legacy_command(record):
+            # Simulate a pre-install restored process: settings includes the new
+            # package, but its frozen CLI extension whitelist does not.
+            return original_command(record).replace(' -e ' + shlex.quote(str(root / 'pi/packages/pi-codex-accounts')), '')
+        m.command_for = legacy_command
     m.atomic_json(m.AGENT / 'settings.json', {'packages': [str(p) for p in (root / 'pi/packages').iterdir()],
                   'defaultProvider': 'openai-codex', 'defaultModel': 'gpt-6-astra', 'defaultThinkingLevel': 'medium'})
     file = home / 'fixture.jsonl'
@@ -52,6 +61,6 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
         assert width == '45', width
         m.checkpoint()
         assert len(m.read_json(m.MANIFEST, {})['sessions']) == 1
-        print('PASS: actual Pi resume, NORMAL, registry registration, ready tree, 45 columns, checkpoint (no model call)')
+        print('PASS: actual Pi resume, two account rows, NORMAL, registry, 45-column tree, checkpoint (no model call)' + ('; legacy CLI whitelist' if '--legacy-cli' in sys.argv else ''))
     finally:
         m.tmux('kill-server', check=False)

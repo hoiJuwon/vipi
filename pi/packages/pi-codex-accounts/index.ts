@@ -147,7 +147,7 @@ export function routeStream(
   return output;
 }
 
-export default async function codexAccounts(pi: ExtensionAPI) {
+export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void> {
   // Uses Pi's existing file-locked CredentialStore. Never copy/rotate auth.json.
   const runtime = await ModelRuntime.create();
   const base = runtime.getProvider(ACCOUNT_IDS[0]);
@@ -275,14 +275,15 @@ export default async function codexAccounts(pi: ExtensionAPI) {
   async function tick(): Promise<void> {
     try { await Promise.all(ACCOUNT_IDS.map((_id, index) => refreshUsage(index))); publish(); } catch { /* Cache failure must not interrupt chat. */ }
   }
-  pi.on("session_start", async () => {
+  function start(): void {
     stopped = false;
     if (timer) clearInterval(timer);
     publish();
     void tick();
     timer = setInterval(() => { void tick(); }, 15_000);
     timer.unref?.();
-  });
+  }
+  pi.on("session_start", start);
   pi.on("session_shutdown", () => { stopped = true; if (timer) clearInterval(timer); timer = undefined; });
   pi.registerCommand("codex-accounts", {
     description: "Show both Codex accounts, remaining quota and reset times",
@@ -295,4 +296,9 @@ export default async function codexAccounts(pi: ExtensionAPI) {
       ctx.ui.notify(`${lines.join("\n")}\n계정 1: /login openai-codex\n계정 2: /login openai-codex-2\n* 현재 세션 사용 계정 · 숫자는 잔여량 · ~ 마지막 조회값`, "info");
     },
   });
+  return start;
+}
+
+export default async function codexAccounts(pi: ExtensionAPI): Promise<void> {
+  await installCodexAccounts(pi);
 }
