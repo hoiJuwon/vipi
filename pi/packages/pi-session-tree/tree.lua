@@ -590,8 +590,13 @@ local function normalize_target_vim_mode(entry, wait_for_startup)
     local lines = vim.split(capture, "\n", { plain = true })
     for index = #lines, 1, -1 do
       local line = lines[index]
-      if line:find("Weekly Usage Limit:", 1, true) then
-        local left = vim.trim(vim.split(line, "Thinking:", { plain = true })[1] or "")
+      local left
+      if line:match("^%s*Thinking:%s") and index > 1 then
+        left = vim.trim(vim.split(vim.trim(lines[index - 1]), "  ", { plain = true })[1] or "")
+      elseif line:find("Weekly Usage Limit:", 1, true) then
+        left = vim.trim(vim.split(line, "Thinking:", { plain = true })[1] or "")
+      end
+      if left ~= nil then
         if left == "" or left == "NORMAL" then return "normal" end
         if left:find("INSERT", 1, true) then return "insert" end
         if left:find("VISUAL", 1, true) then return "visual" end

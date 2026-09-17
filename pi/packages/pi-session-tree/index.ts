@@ -44,9 +44,19 @@ async function run(command: string, args: string[], timeout = 5000): Promise<Com
 }
 
 export function vimStateFromFooter(output: string): string | undefined {
-  const footer = output.split("\n").reverse().find((line) => line.includes("Weekly Usage Limit:"));
-  if (!footer) return undefined;
-  const left = footer.split("Thinking:", 1)[0]?.trim() ?? "";
+  const lines = output.split("\n");
+  let left: string | undefined;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (/^\s*Thinking:\s/u.test(lines[index]) && index > 0) {
+      left = lines[index - 1].trimStart().split(/\s{2,}/u, 1)[0].trim();
+      break;
+    }
+    if (lines[index].includes("Weekly Usage Limit:")) {
+      left = lines[index].split("Thinking:", 1)[0].trim();
+      break;
+    }
+  }
+  if (left === undefined) return undefined;
   if (left === "NORMAL" || left === "") return "normal";
   if (left.includes("INSERT")) return "insert";
   if (left.includes("VISUAL")) return "visual";

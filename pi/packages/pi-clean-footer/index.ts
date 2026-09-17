@@ -66,13 +66,13 @@ export default function cleanFooter(pi: ExtensionAPI) {
   let requestRender: (() => void) | undefined;
   let vimStatus: { text: string; mode: string } = { text: "", mode: "normal" };
   let thinkingLevel = "high";
-  let accountsText: string | undefined;
+  let accountRows: { text: string; active: boolean }[] | undefined;
 
   pi.events.on("vipi:codex-accounts", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null) return;
-    const text = (payload as { text?: unknown }).text;
-    if (typeof text !== "string") return;
-    accountsText = text;
+    const rows = (payload as { rows?: unknown }).rows;
+    if (!Array.isArray(rows) || rows.length !== 2 || !rows.every(row => row && typeof row.text === "string" && typeof row.active === "boolean")) return;
+    accountRows = rows;
     requestRender?.();
   });
 
@@ -90,7 +90,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
   });
 
   pi.on("after_provider_response", async (event) => {
-    if (accountsText !== undefined) return; // Account-tagged usage is owned by the router.
+    if (accountRows !== undefined) return; // Account-tagged usage is owned by the router.
     const next = weeklyUsageFromHeaders(event.headers);
     if (!next) return;
     weeklyUsage = next;
@@ -111,30 +111,23 @@ export default function cleanFooter(pi: ExtensionAPI) {
         },
         invalidate() {},
         render(width: number): string[] {
-          const usageText = accountsText !== undefined
-            ? `Weekly Usage Limit: ${accountsText}`
-            : weeklyUsage
-            ? `Weekly Usage Limit: ${formatPercent(100 - weeklyUsage.usedPercent)}% remaining`
-            : "Weekly Usage Limit: checking...";
-          const right = theme.fg("dim", `Thinking: ${thinkingLevel}  ${usageText}`);
+          const rows = accountRows ?? [
+            { text: weeklyUsage ? `Usage ${formatPercent(100 - weeklyUsage.usedPercent)}% Left` : "Usage checking...", active: true },
+            { text: "", active: false },
+          ];
           const vimColor = vimStatus.text.startsWith(":")
             ? "warning"
             : vimStatus.mode.startsWith("visual")
               ? "customMessageLabel"
               : "muted";
-          const vim = vimStatus.text ? theme.fg(vimColor, vimStatus.text) : "";
-          const rightWidth = visibleWidth(right);
-          const vimWidth = visibleWidth(vim);
-          if (vimWidth + rightWidth + 1 <= width) {
-            return [`${vim}${" ".repeat(width - vimWidth - rightWidth)}${right}`];
-          }
-          const availableForVim = Math.max(0, width - rightWidth - 1);
-          if (availableForVim > 0) {
-            const left = truncateToWidth(vim, availableForVim, "");
+          const leftRows = [theme.fg(vimColor, vimStatus.text.trim() || "NORMAL"), theme.fg("dim", `Thinking: ${thinkingLevel}`)];
+          return leftRows.map((value, index) => {
+            const left = truncateToWidth(value, width, "");
             const leftWidth = visibleWidth(left);
-            return [`${left}${" ".repeat(Math.max(1, width - leftWidth - rightWidth))}${right}`];
-          }
-          return [truncateToWidth(right, width, "")];
+            const row = rows[index];
+            const right = truncateToWidth(theme.fg(row.active ? "muted" : "dim", row.text), Math.max(0, width - leftWidth - 2), "…");
+            return `${left}${" ".repeat(Math.max(0, width - leftWidth - visibleWidth(right)))}${right}`;
+          });
         },
       };
     });

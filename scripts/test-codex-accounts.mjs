@@ -27,6 +27,10 @@ try {
   const usage = mod.usageFromBody({ rate_limit: { allowed: true, limit_reached: false, primary_window: { used_percent: 54, limit_window_seconds: 604800, reset_at: now / 1000 + 86400 } } });
   assert.equal(mod.formatAccounts([{ number: 1, active: true, connected: true, usage }, { number: 2, active: false, connected: false }]), '1* 주46% · 2 미연결');
   assert.match(mod.formatAccounts([{ number: 1, active: true, connected: true, usage }], now + 180000), /~46%/);
+  const rows = mod.accountRows([{ number: 1, active: true, connected: true, email: 'roy@example.com', usage }, { number: 2, active: false, connected: false }]);
+  assert.deepEqual(rows, [{ text: 'roy@example.com | Usage 46% Left', active: true }, { text: 'account2 not connected', active: false }]);
+  assert.match(mod.accountRows([{ number: 2, active: false, connected: true, email: 'second@example.com', usage }])[0].text, /^second@example.com \| Usage 46% Left$/);
+  assert.match(mod.accountRows([{ number: 1, active: true, connected: true, usage }], now + 180000)[0].text, /~46% Left/);
   const model = { provider: 'openai-codex', api: 'openai-codex-responses', id: 'gpt-6-astra' };
   const msg = reason => ({ role: 'assistant', content: [], ...model, model: model.id, stopReason: reason, errorMessage: 'simulated' });
   function eventsStream(events) {
@@ -52,6 +56,10 @@ try {
 
   // Full extension registration/dispatch against fake native OAuth & transport.
   const token = id => `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: id } })).toString('base64url')}.x`;
+  const emailToken = email => `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/profile': { email } })).toString('base64url')}.x`;
+  assert.equal(mod.accountEmail(emailToken('roy@example.com')), 'roy@example.com');
+  assert.equal(mod.accountEmail(emailToken('bad\u001b[31m@example.com')), undefined);
+  assert.equal(mod.accountEmail('invalid'), undefined);
   const credentials = Object.fromEntries(mod.ACCOUNT_IDS.map((id, index) => [id, { type: 'oauth', access: token('account-' + index), refresh: 'test-only', expires: now + 999999 }]));
   writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials), { mode: 0o600 });
   let loginCredential = credentials['openai-codex'];
@@ -101,8 +109,20 @@ try {
   const footerEvents = new Map(), footerHooks = new Map(); let component;
   footer({ getThinkingLevel: () => 'high', setThinkingLevel: () => assert.fail('footer must not change thinking'),
     on: (e, fn) => footerHooks.set(e, fn), events: { on: (e, fn) => footerEvents.set(e, fn) } });
-  footerEvents.get('vipi:codex-accounts')({ text: '1* 주46% · 2 주80%' });
+  footerEvents.get('vipi:codex-accounts')({ rows });
   await footerHooks.get('session_start')({}, { mode: 'tui', ui: { setFooter: factory => { component = factory({ requestRender() {} }, { fg: (_color, text) => text }); } } });
-  assert.match(component.render(120)[0], /Thinking: high.*1\* 주46% · 2 주80%/);
+  const rendered = component.render(120);
+  assert.equal(rendered.length, 2);
+  assert.match(rendered[0], /^NORMAL\s+roy@example.com \| Usage 46% Left$/);
+  assert.match(rendered[1], /^Thinking: high\s+account2 not connected$/);
+  const { visibleWidth } = await jiti.import('@earendil-works/pi-tui');
+  for (const width of [0, 1, 12, 30, 60, 120]) for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
+  const { vimStateFromFooter } = await jiti.import('../pi/packages/pi-session-tree/index.ts');
+  for (const [text, mode, expected] of [['NORMAL', 'normal', 'normal'], ['INSERT', 'insert', 'insert'], ['VISUAL LINE', 'visual-line', 'visual'], ['NORMAL g_', 'normal', 'pending'], [':sessions .', 'normal', 'ex']]) {
+    footerEvents.get('pi-vim:status-line')({ text, mode });
+    assert.equal(vimStateFromFooter(component.render(120).join('\n')), expected);
+  }
+  assert.equal(vimStateFromFooter('NORMAL    Thinking: high  Weekly Usage Limit: 43% remaining'), 'normal');
+  assert.equal(vimStateFromFooter('no footer'), undefined);
   console.log('PASS: quota parsing/reset/staleness, confirmed-only failover, no replay after output, abort, duplicate account guard, isolated tokens/session IDs, both-account footer, thinking preserved');
 } finally { rmSync(home, { recursive: true, force: true }); }

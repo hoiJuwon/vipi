@@ -102,7 +102,7 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 
 ### Codex 두 계정
 
-기존 계정 1은 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-2`로 **다른 계정**을 연결한다. `/codex-accounts`는 두 계정의 잔여량과 초기화 시각을 보여준다. 아래 바의 `1* 주45% · 2 주80%`에서 `*`가 현재 계정이다.
+기존 계정 1은 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-2`로 **다른 계정**을 연결한다. `/codex-accounts`는 두 계정의 잔여량과 초기화 시각을 보여준다. 아래 바 왼쪽은 Vim 상태와 그 아래 Thinking, 오른쪽 두 줄은 각 계정의 `email | Usage 43% Left` 형식이다. 미연결 슬롯은 `account2 not connected`로 표시하고 현재 사용 계정은 더 밝게 표시한다.
 
 사용량 소진이 확인된 경우에만 자동 전환하며, 이미 출력한 응답·실행한 도구는 재실행하지 않는다. 계정별 OAuth는 Pi의 기본 file lock으로 갱신한다. [계정 연결·자동 전환·검증 범위·해제](pi/packages/pi-codex-accounts/README.md)를 읽는다.
 

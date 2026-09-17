@@ -9,7 +9,7 @@ const STATE = join(getAgentDir(), "codex-accounts");
 const POLL_MS = 60_000;
 type Window = { minutes: number; used: number; reset?: number };
 export type Usage = { checkedAt: number; windows: Window[]; limited: boolean; fingerprint?: string; error?: string };
-type Account = { number: number; connected: boolean; active: boolean; usage?: Usage };
+type Account = { number: number; connected: boolean; active: boolean; email?: string; usage?: Usage };
 
 export function accountId(token: string): string {
   const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
@@ -17,6 +17,28 @@ export function accountId(token: string): string {
   if (typeof id !== "string" || !id) throw new Error("Codex OAuth 계정 식별자 없음");
   return id;
 }
+export function accountEmail(token: string): string | undefined {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+    const email = payload["https://api.openai.com/profile"]?.email ?? payload.email;
+    return typeof email === "string" && email.length <= 254 && /^[^\s\x00-\x1f\x7f|]+@[^\s\x00-\x1f\x7f|]+$/u.test(email) ? email : undefined;
+  } catch { return undefined; }
+}
+
+export function accountRows(accounts: Account[], now = Date.now()): { text: string; active: boolean }[] {
+  return accounts.map(account => {
+    if (!account.connected) return { text: `account${account.number} not connected`, active: false };
+    const usage = account.usage;
+    const window = usage?.windows.find(w => Math.abs(w.minutes - 10080) <= 60)
+      ?? [...(usage?.windows ?? [])].sort((a, b) => b.minutes - a.minutes)[0];
+    const stale = usage?.error || (usage && now - usage.checkedAt > 2 * POLL_MS);
+    const remaining = !window ? (usage?.error ? "unavailable" : "checking...")
+      : window.reset && window.reset * 1000 <= now ? "checking..."
+      : `${stale ? "~" : ""}${Math.round(100 - window.used)}% Left`;
+    return { text: `${account.email ?? `account${account.number}`} | Usage ${remaining}`, active: account.active };
+  });
+}
+
 function fingerprint(id: string): string {
   return createHash("sha256").update(id).digest("hex");
 }
@@ -150,10 +172,17 @@ export default async function codexAccounts(pi: ExtensionAPI) {
     renameSync(temporary, statePath(index));
   }
   function accounts(): Account[] {
-    return ACCOUNT_IDS.map((_id, index) => ({ number: index + 1, connected: Boolean(identity(index)), active: index === active, usage: readUsage(index) }));
+    return ACCOUNT_IDS.map((id, index) => {
+      const credential = readStoredCredential(id);
+      return { number: index + 1, connected: Boolean(identity(index)), active: index === active,
+        email: credential?.type === "oauth" ? accountEmail(credential.access) : undefined, usage: readUsage(index) };
+    });
   }
   function publish(): void {
-    if (!stopped) pi.events.emit("vipi:codex-accounts", { text: formatAccounts(accounts()) });
+    if (!stopped) {
+      const values = accounts();
+      pi.events.emit("vipi:codex-accounts", { text: formatAccounts(values), rows: accountRows(values) });
+    }
   }
   async function refreshUsage(index: number, force = false, signal?: AbortSignal): Promise<Usage | undefined> {
     const who = identity(index);
