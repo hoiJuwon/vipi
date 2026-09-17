@@ -65,7 +65,16 @@ export default function cleanFooter(pi: ExtensionAPI) {
   let weeklyUsage = readUsage();
   let requestRender: (() => void) | undefined;
   let vimStatus: { text: string; mode: string } = { text: "", mode: "normal" };
-  let thinkingLevel = "medium";
+  let thinkingLevel = "high";
+  let accountsText: string | undefined;
+
+  pi.events.on("vipi:codex-accounts", (payload: unknown) => {
+    if (typeof payload !== "object" || payload === null) return;
+    const text = (payload as { text?: unknown }).text;
+    if (typeof text !== "string") return;
+    accountsText = text;
+    requestRender?.();
+  });
 
   pi.events.on("pi-vim:status-line", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null) return;
@@ -81,6 +90,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
   });
 
   pi.on("after_provider_response", async (event) => {
+    if (accountsText !== undefined) return; // Account-tagged usage is owned by the router.
     const next = weeklyUsageFromHeaders(event.headers);
     if (!next) return;
     weeklyUsage = next;
@@ -92,7 +102,6 @@ export default function cleanFooter(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") return;
-    pi.setThinkingLevel("medium");
     thinkingLevel = pi.getThinkingLevel();
     ctx.ui.setFooter((tui, theme) => {
       requestRender = () => tui.requestRender();
@@ -102,7 +111,9 @@ export default function cleanFooter(pi: ExtensionAPI) {
         },
         invalidate() {},
         render(width: number): string[] {
-          const usageText = weeklyUsage
+          const usageText = accountsText !== undefined
+            ? `Weekly Usage Limit: ${accountsText}`
+            : weeklyUsage
             ? `Weekly Usage Limit: ${formatPercent(100 - weeklyUsage.usedPercent)}% remaining`
             : "Weekly Usage Limit: checking...";
           const right = theme.fg("dim", `Thinking: ${thinkingLevel}  ${usageText}`);

@@ -1,0 +1,12 @@
+{
+  "name": "pi-codex-accounts-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Two separate Codex OAuth accounts, confirmed-quota failover and shared usage status",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-ai": "*"
+  },
+  "pi": { "extensions": ["./index.ts"] }
+}

@@ -6,7 +6,7 @@
   "outputPad": 0,
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "transport": "sse",
   "piVim": {
@@ -33,6 +33,7 @@
   "packages": [
     "npm:pi-mcp-adapter@2.27.0",
     "packages/pi-clean-footer",
+    "packages/pi-codex-accounts",
     "packages/pi-vim-local",
     "packages/pi-session-tree",
     "packages/pi-conversation-nav",

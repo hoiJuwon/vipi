@@ -56,13 +56,13 @@ python3 scripts/setup.py --apply --ios-path "$HOME/vipi-ios"
 
 ### 로그인 및 적용 확인
 
-Pi 안에서 `/login` → `openai-codex`. `/model`에서 `gpt-6-astra` 선택 가능 여부를 확인한다. 기본값은 **Astra / medium**이다. 계정에 모델이 없다면 모델 목록 갱신이나 provider 접근 확인이 먼저이며 ID를 추가한다고 권한이 생기지 않는다.
+Pi 안에서 `/login` → `openai-codex`. `/model`에서 `gpt-6-astra` 선택 가능 여부를 확인한다. 기본값은 **Astra / high**이다. 계정에 모델이 없다면 모델 목록 갱신이나 provider 접근 확인이 먼저이며 ID를 추가한다고 권한이 생기지 않는다.
 
 ```bash
 pi list
 pi --list-models astra
 # 선택 사항: 실제 모델 호출 (사용량 발생)
-pi --model openai-codex/gpt-6-astra --thinking medium -p --no-session 'Reply only OK.'
+pi --model openai-codex/gpt-6-astra --thinking high -p --no-session 'Reply only OK.'
 ```
 
 열려 있던 Pi는 사용자가 유휴 상태에서 `/reload`한다. 새 세션은 새 설정을 읽는다. 기존 대화에 저장된 모델/모드는 새 기본값과 다를 수 있다.
@@ -82,14 +82,14 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 
 | 영역 | 설정 |
 |---|---|
-| 모델 | `openai-codex/gpt-6-astra`, thinking `medium`, reasoning block 숨김, SSE |
+| 모델 | `openai-codex/gpt-6-astra`, thinking `high`, reasoning block 숨김, SSE |
 | TUI | `regular`, tmux scrollback 유지, Vim 테마 |
 | 입력 | 어두운 borderless 배경, 위아래 padding, 초록색 `  > `, INSERT에서만 cursor |
 | 모드 | 신규 tree `n` 세션은 INSERT, 정상 제출 후 NORMAL, 기존 세션 활성화는 NORMAL |
 | 리뷰 | NORMAL의 `R`만 tmux snapshot REVIEW; Esc는 live NORMAL |
 | 탐색 | `:e .` 세션 tree, `gt/gT` 이동, `zt/zb/zz` 최신 응답 탐색 |
 | 트리 | **45칸 고정**, 분류별 정렬·생성순, `r` 수동 이름/분류, working/unread/권한 대기 |
-| footer | Vim 상태 + thinking + Codex weekly usage |
+| footer | Vim 상태 + thinking + Codex 두 계정 잔여량/현재 계정 |
 | 응답 | Korean Direct, URL/경로 강조, 사용자 메시지 정렬, Markdown heading 표시 보정 |
 | 활동 | 경량 activity line, tool 및 경과 시간 표시 |
 | Ponytail | `v4.9.0`, full 기본, 시작 알림·상태 표시 숨김 |
@@ -99,6 +99,12 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 개별 동작과 키는 [pi/packages](pi/packages)의 각 README가 기준이다. `Ctrl+C`는 프롬프트를 지우지 않고 Esc처럼 처리한다. tree `n/a/r/x`, `j/k`, `Enter/l`, 마우스 선택을 지원한다. 현재 owner Pi 종료는 `:q`로 한다.
 
 > 전역 설정에는 기존 `defaultProjectTrust: "always"`가 포함된다. 신뢰하지 않는 repo의 프로젝트 확장 실행이 위험하므로 다른 사용자는 이 정책을 검토하고 자신의 Pi trust 설정으로 변경해야 한다.
+
+### Codex 두 계정
+
+기존 계정 1은 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-2`로 **다른 계정**을 연결한다. `/codex-accounts`는 두 계정의 잔여량과 초기화 시각을 보여준다. 아래 바의 `1* 주45% · 2 주80%`에서 `*`가 현재 계정이다.
+
+사용량 소진이 확인된 경우에만 자동 전환하며, 이미 출력한 응답·실행한 도구는 재실행하지 않는다. 계정별 OAuth는 Pi의 기본 file lock으로 갱신한다. [계정 연결·자동 전환·검증 범위·해제](pi/packages/pi-codex-accounts/README.md)를 읽는다.
 
 ## 3. MCP / Sky 복원
 

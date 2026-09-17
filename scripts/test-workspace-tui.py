@@ -40,11 +40,12 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
             screen = m.tmux('capture-pane', '-p', '-t', pi_pane['pane_id']).stdout
             registered = any(e.get('piSessionId') == identity for e in m.registry())
             tree_ready = m.tmux('show-options', '-p', '-v', '-t', tree['pane_id'], '@pi_session_tree_ready', check=False).stdout.strip()
-            if 'NORMAL' in screen and registered and tree_ready == '1':
+            if 'NORMAL' in screen and '2 미연결' in screen and registered and tree_ready == '1':
                 ready = True
                 break
             time.sleep(0.5)
         assert ready, screen
+        assert 'Thinking:' in screen, screen  # No auth/model is available in this offline fixture.
         width = m.tmux('display-message', '-p', '-t', tree['pane_id'], '#{pane_width}').stdout.strip()
         assert width == '45', width
         m.checkpoint()
