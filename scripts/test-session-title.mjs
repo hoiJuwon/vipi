@@ -30,6 +30,8 @@ try {
     modelRegistry: { find: (provider, id) => { assert.equal(id, 'gpt-6-astra'); return { provider, id }; },
       hasConfiguredAuth: () => true, complete: async (_model, context, options) => {
         assert.equal(options.reasoningEffort, 'low'); assert.equal(options.transport, 'sse');
+        assert.match(context.messages[0].content[0].text, /공백 포함 2~10자/);
+        assert.match(context.messages[0].content[0].text, /최대 12자/);
         prompts.push(context.messages[0].content[0].text); duringRequest(); return reply;
       } } };
   const turn = async () => { hooks.get('before_agent_start')({ prompt: '후속 질문은 이름에 쓰지 마' }, ctx); await new Promise(resolve => setImmediate(resolve)); };
@@ -41,6 +43,9 @@ try {
   const calls = prompts.length; await turn(); assert.equal(prompts.length, calls, 'completed title must stay fixed');
   name = '기타 / 컴퓨터 용량 문제 한번 체크해줘';
   await commands.get('retitle').handler('', ctx); assert.equal(name, '기타 / 디스크 정리 후보 점검');
+  reply = { stopReason: 'stop', content: [{ type: 'text', text: '컴퓨터 저장 공간 전체 점검 및 삭제 후보 목록' }] };
+  await commands.get('retitle').handler('', ctx);
+  assert.equal(Array.from(name.split(' / ')[1]).length, 12, 'overlong model output must obey hard cap');
   duringRequest = () => { name = '개발 / 직접 지정'; };
   await commands.get('retitle').handler('', ctx); assert.equal(name, '개발 / 직접 지정');
   duringRequest = () => { sessionId = 'other'; };
