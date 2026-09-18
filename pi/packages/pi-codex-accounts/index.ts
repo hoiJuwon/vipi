@@ -7,6 +7,14 @@ import { join } from "node:path";
 export const ACCOUNT_IDS = ["openai-codex", "openai-codex-2"] as const;
 const STATE = join(getAgentDir(), "codex-accounts");
 const POLL_MS = 60_000;
+const PREFERENCE_PATH = join(STATE, "preference.json");
+function readPreference(): { account: 1 | 2; revision: string } {
+  try {
+    const value = JSON.parse(readFileSync(PREFERENCE_PATH, "utf8"));
+    if ((value.account === 1 || value.account === 2) && typeof value.revision === "string") return value;
+  } catch {}
+  return { account: 1, revision: "default" };
+}
 type Window = { minutes: number; used: number; reset?: number };
 export type Usage = { checkedAt: number; windows: Window[]; limited: boolean; fingerprint?: string; error?: string };
 type Account = { number: number; connected: boolean; active: boolean; email?: string; usage?: Usage };
@@ -152,7 +160,8 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
   const runtime = await ModelRuntime.create();
   const base = runtime.getProvider(ACCOUNT_IDS[0]);
   if (!base?.auth.oauth) throw new Error("Codex native OAuth provider unavailable");
-  let active = 0;
+  let preference = readPreference();
+  let active = preference.account - 1;
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
   const identity = (index: number) => credentialIdentity(ACCOUNT_IDS[index]);
@@ -239,12 +248,18 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
   pi.registerProvider(second); // /login openai-codex-2 uses Pi's normal OAuth UI/storage.
 
   function stream(model: any, context: any, options: any = {}, simple = false): AssistantMessageEventStream {
+    const latest = readPreference();
+    if (latest.revision !== preference.revision) {
+      preference = latest;
+      active = preference.account - 1;
+    }
+    const requestRevision = preference.revision;
     const generalQuota = !model.id.toLowerCase().includes("spark");
     const candidates = [active, 1 - active].filter(i => identity(i) && (!generalQuota || !exhausted(readUsage(i))));
     return routeStream(model, candidates, async index => {
       const auth = await runtime.getAuth(ACCOUNT_IDS[index], { signal: options.signal });
       if (!auth?.auth.apiKey) throw new Error(`Codex 계정 ${index + 1} 로그인이 필요합니다.`);
-      active = index;
+      if (preference.revision === requestRevision) active = index;
       publish();
       let quota = false;
       const who = fingerprint(accountId(auth.auth.apiKey));
@@ -286,14 +301,29 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
   pi.on("session_start", start);
   pi.on("session_shutdown", () => { stopped = true; if (timer) clearInterval(timer); timer = undefined; });
   pi.registerCommand("codex-accounts", {
-    description: "Show both Codex accounts, remaining quota and reset times",
-    handler: async (_args, ctx) => {
+    description: "Show Codex usage or set the preferred account: /codex-accounts use 1|2",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        const match = /^use\s+([12])$/u.exec(args.trim());
+        if (!match) return ctx.ui.notify("사용법: /codex-accounts 또는 /codex-accounts use 1|2", "warning");
+        const account = Number(match[1]) as 1 | 2;
+        if (!identity(account - 1)) return ctx.ui.notify(`계정 ${account}을 먼저 로그인하세요.`, "warning");
+        const selected = { account, revision: randomUUID() };
+        mkdirSync(STATE, { recursive: true, mode: 0o700 });
+        const temporary = `${PREFERENCE_PATH}.${selected.revision}.tmp`;
+        writeFileSync(temporary, JSON.stringify(selected), { mode: 0o600 });
+        renameSync(temporary, PREFERENCE_PATH);
+        preference = selected;
+        active = account - 1;
+        publish();
+        return ctx.ui.notify(`우선 계정을 ${account}번으로 저장했습니다. 새 버전이 로드된 세션의 다음 요청부터 적용되며, 소진 시 다른 계정으로 전환합니다.`, "info");
+      }
       await Promise.all(ACCOUNT_IDS.map((_id, index) => refreshUsage(index, true)));
       const lines = accounts().map(a => {
         const resets = a.usage?.windows.map(w => `${Math.round(w.minutes / 60)}h 창: ${w.reset ? new Date(w.reset * 1000).toLocaleString() : "알 수 없음"}`).join(", ");
         return `${formatAccounts([a])}${resets ? ` — 초기화 ${resets}` : ""}`;
       });
-      ctx.ui.notify(`${lines.join("\n")}\n계정 1: /login openai-codex\n계정 2: /login openai-codex-2\n* 현재 세션 사용 계정 · 숫자는 잔여량 · ~ 마지막 조회값`, "info");
+      ctx.ui.notify(`${lines.join("\n")}\n계정 1: /login openai-codex\n계정 2: /login openai-codex-2\n우선 계정 ${readPreference().account} · 변경: /codex-accounts use 1|2\n* 현재 세션 사용 계정 · 숫자는 잔여량 · ~ 마지막 조회값`, "info");
     },
   });
   return start;

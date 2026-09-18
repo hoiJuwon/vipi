@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -63,7 +63,7 @@ try {
   const credentials = Object.fromEntries(mod.ACCOUNT_IDS.map((id, index) => [id, { type: 'oauth', access: token('account-' + index), refresh: 'test-only', expires: now + 999999 }]));
   writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials), { mode: 0o600 });
   let loginCredential = credentials['openai-codex'];
-  const calls = [], providers = new Map(), hooks = new Map(), published = [];
+  const calls = [], providers = new Map(), hooks = new Map(), commands = new Map(), published = [];
   const native = { id: 'openai-codex', name: 'Native', getModels: () => [model], refreshModels() {}, auth: { oauth: { login: async () => loginCredential } },
     stream(model, context, options) {
       const stream = createAssistantMessageEventStream();
@@ -85,7 +85,7 @@ try {
   const originalCreate = ModelRuntime.create;
   ModelRuntime.create = async () => ({ getProvider: () => native, registerNativeProvider() {}, getAuth: async id => ({ auth: { apiKey: credentials[id].access } }) });
   try {
-    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand() {}, on: (e, f) => hooks.set(e, f), events: { emit: (...v) => published.push(v) } });
+    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand: (name, command) => commands.set(name, command), on: (e, f) => hooks.set(e, f), events: { emit: (...v) => published.push(v) } });
     assert.ok(providers.has('openai-codex-2'));
     assert.equal(providers.get('openai-codex-2').refreshModels, undefined, 'login alias must not reset the primary model catalog');
     assert.deepEqual(providers.get('openai-codex').getModels(), [model]);
@@ -102,6 +102,33 @@ try {
     assert.notEqual(calls[0].options.sessionId, calls[1].options.sessionId);
     assert.strictEqual(calls[0].context, context); assert.strictEqual(calls[1].context, context);
     assert.match(published.at(-1)[1].text, /2\*/);
+    const notices = [], ui = { notify: text => notices.push(text) };
+    const preferencePath = join(home, 'codex-accounts/preference.json');
+    await commands.get('codex-accounts').handler('use 2', { ui });
+    assert.equal(JSON.parse(readFileSync(preferencePath)).account, 2);
+    assert.equal(statSync(preferencePath).mode & 0o777, 0o600);
+    const selected = readFileSync(preferencePath, 'utf8');
+    await commands.get('codex-accounts').handler('use 3', { ui });
+    assert.equal(readFileSync(preferencePath, 'utf8'), selected);
+    writeFileSync(join(home, 'auth.json'), JSON.stringify({ 'openai-codex': credentials['openai-codex'] }));
+    await commands.get('codex-accounts').handler('use 2', { ui });
+    assert.match(notices.at(-1), /먼저 로그인/);
+    assert.equal(readFileSync(preferencePath, 'utf8'), selected);
+    writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials));
+    // A separate extension instance must start with the persisted account 2.
+    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand() {}, on() {}, events: { emit() {} } });
+    calls.length = 0;
+    await providers.get('openai-codex').stream(model, context, {}).result();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.apiKey, credentials['openai-codex-2'].access);
+    // An external preference change applies on the next request, while quota fallback remains intact.
+    rmSync(join(home, 'codex-accounts/1.json'));
+    writeFileSync(preferencePath, JSON.stringify({ account: 1, revision: 'external-switch' }));
+    calls.length = 0;
+    await providers.get('openai-codex').stream(model, context, {}).result();
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].options.apiKey, credentials['openai-codex'].access);
+    assert.equal(calls[1].options.apiKey, credentials['openai-codex-2'].access);
   } finally { ModelRuntime.create = originalCreate; hooks.get('session_shutdown')?.(); }
 
   // Footer must not mutate the user's high thinking setting on session_start.
