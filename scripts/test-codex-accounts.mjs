@@ -63,7 +63,7 @@ try {
   const credentials = Object.fromEntries(mod.ACCOUNT_IDS.map((id, index) => [id, { type: 'oauth', access: token('account-' + index), refresh: 'test-only', expires: now + 999999 }]));
   writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials), { mode: 0o600 });
   let loginCredential = credentials['openai-codex'];
-  const calls = [], providers = new Map(), hooks = new Map(), commands = new Map(), published = [];
+  const calls = [], providers = new Map(), hooks = new Map(), commands = new Map(), serviceEvents = new Map(), published = [];
   const native = { id: 'openai-codex', name: 'Native', getModels: () => [model], refreshModels() {}, auth: { oauth: { login: async () => loginCredential } },
     stream(model, context, options) {
       const stream = createAssistantMessageEventStream();
@@ -85,7 +85,7 @@ try {
   const originalCreate = ModelRuntime.create;
   ModelRuntime.create = async () => ({ getProvider: () => native, registerNativeProvider() {}, getAuth: async id => ({ auth: { apiKey: credentials[id].access } }) });
   try {
-    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand: (name, command) => commands.set(name, command), on: (e, f) => hooks.set(e, f), events: { emit: (...v) => published.push(v) } });
+    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand: (name, command) => commands.set(name, command), on: (e, f) => hooks.set(e, f), events: { on: (e, fn) => serviceEvents.set(e, fn), emit: (...v) => published.push(v) } });
     assert.ok(providers.has('openai-codex-2'));
     assert.equal(providers.get('openai-codex-2').refreshModels, undefined, 'login alias must not reset the primary model catalog');
     assert.deepEqual(providers.get('openai-codex').getModels(), [model]);
@@ -102,6 +102,9 @@ try {
     assert.notEqual(calls[0].options.sessionId, calls[1].options.sessionId);
     assert.strictEqual(calls[0].context, context); assert.strictEqual(calls[1].context, context);
     assert.match(published.at(-1)[1].text, /2\*/);
+    const previousPublications = published.length;
+    serviceEvents.get('vipi:codex-accounts:request')();
+    assert.equal(published.length, previousPublications + 1, 'live service must answer footer handshake');
     const notices = [], ui = { notify: text => notices.push(text) };
     const preferencePath = join(home, 'codex-accounts/preference.json');
     await commands.get('codex-accounts').handler('use 2', { ui });
@@ -116,7 +119,7 @@ try {
     assert.equal(readFileSync(preferencePath, 'utf8'), selected);
     writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials));
     // A separate extension instance must start with the persisted account 2.
-    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand() {}, on() {}, events: { emit() {} } });
+    await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand() {}, on() {}, events: { emit() {}, on() {} } });
     calls.length = 0;
     await providers.get('openai-codex').stream(model, context, {}).result();
     assert.equal(calls.length, 1);
@@ -135,7 +138,7 @@ try {
   const { default: footer } = await jiti.import('../pi/packages/pi-clean-footer/index.ts');
   const footerEvents = new Map(), footerHooks = new Map(); let component;
   footer({ getThinkingLevel: () => 'high', setThinkingLevel: () => assert.fail('footer must not change thinking'),
-    on: (e, fn) => footerHooks.set(e, fn), events: { on: (e, fn) => footerEvents.set(e, fn) } });
+    on: (e, fn) => footerHooks.set(e, fn), events: { on: (e, fn) => footerEvents.set(e, fn), emit: (e, data) => footerEvents.get(e)?.(data) } });
   footerEvents.get('vipi:codex-accounts')({ rows });
   await footerHooks.get('session_start')({}, { mode: 'tui', ui: { setFooter: factory => { component = factory({ requestRender() {} }, { fg: (_color, text) => text }); } } });
   const rendered = component.render(120);

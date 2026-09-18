@@ -28,7 +28,13 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
             # package, but its frozen CLI extension whitelist does not.
             return original_command(record).replace(' -e ' + shlex.quote(str(root / 'pi/packages/pi-codex-accounts')), '')
         m.command_for = legacy_command
-    m.atomic_json(m.AGENT / 'settings.json', {'packages': [str(p) for p in (root / 'pi/packages').iterdir()],
+    marker = home / 'starts.txt'
+    probe = home / 'lifecycle.ts'
+    probe.write_text('import {readFileSync,writeFileSync} from "node:fs";'
+                     'export default function(pi) { pi.on("session_start", () => {'
+                     f'const p={json.dumps(str(marker))}; let n=0;'
+                     'try {n=Number(readFileSync(p,"utf8"));} catch {} writeFileSync(p,String(n+1)); }); }')
+    m.atomic_json(m.AGENT / 'settings.json', {'packages': [str(p) for p in (root / 'pi/packages').iterdir()] + [str(probe)],
                   'defaultProvider': 'openai-codex', 'defaultModel': 'gpt-6-astra', 'defaultThinkingLevel': 'medium'})
     file = home / 'fixture.jsonl'
     identity = str(uuid.uuid4())
@@ -57,10 +63,24 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
         footer_lines = screen.rstrip().splitlines()[-2:]
         assert footer_lines[0].startswith('NORMAL') and 'account1 not connected' in footer_lines[0], screen
         assert footer_lines[1].startswith('Thinking:') and 'account2 not connected' in footer_lines[1], screen
+        for reload_count in range(1, 3):
+            m.tmux('send-keys', '-t', pi_pane['pane_id'], '-l', 'i/reload')
+            m.tmux('send-keys', '-t', pi_pane['pane_id'], 'Enter')
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                screen = m.tmux('capture-pane', '-p', '-t', pi_pane['pane_id'], '-S', '-2000').stdout
+                footer_lines = screen.rstrip().splitlines()[-2:]
+                if (marker.exists() and int(marker.read_text()) >= reload_count + 1
+                        and 'account1 not connected' in footer_lines[0]
+                        and 'account2 not connected' in footer_lines[1]):
+                    break
+                time.sleep(0.5)
+            else:
+                raise AssertionError(f'Account footer lost after reload {reload_count}: {screen[-4000:]}')
         width = m.tmux('display-message', '-p', '-t', tree['pane_id'], '#{pane_width}').stdout.strip()
         assert width == '45', width
         m.checkpoint()
         assert len(m.read_json(m.MANIFEST, {})['sessions']) == 1
-        print('PASS: actual Pi resume, two account rows, NORMAL, registry, 45-column tree, checkpoint (no model call)' + ('; legacy CLI whitelist' if '--legacy-cli' in sys.argv else ''))
+        print('PASS: actual Pi resume, two account rows after two reloads, NORMAL, registry, 45-column tree, checkpoint (no model call)' + ('; legacy CLI whitelist' if '--legacy-cli' in sys.argv else ''))
     finally:
         m.tmux('kill-server', check=False)

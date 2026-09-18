@@ -110,11 +110,14 @@ export default function cleanFooter(pi: ExtensionAPI) {
       const settings = JSON.parse(readFileSync(resolve(getAgentDir(), "settings.json"), "utf8"));
       accountsEnabled = settings.packages?.some((source: unknown) => typeof source === "string" && source.endsWith("/pi-codex-accounts")) === true;
     } catch {}
-    if (accountsEnabled && !ctx.modelRegistry.getRegisteredNativeProvider("openai-codex-2")) {
+    // A leftover provider is not proof that its usage publisher survived reload.
+    pi.events.emit("vipi:codex-accounts:request", {});
+    if (accountsEnabled && accountRows === undefined) {
       try {
         const start = await installCodexAccounts(pi);
         start();
       } catch {
+        accountRows = [1, 2].map(number => ({ text: `account${number} status unavailable`, active: false }));
         ctx.ui.notify("Codex 계정 확장을 불러오지 못했습니다. 새 Pi에서 다시 확인하세요.", "warning");
       }
     }

@@ -193,6 +193,10 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
       pi.events.emit("vipi:codex-accounts", { text: formatAccounts(values), rows: accountRows(values) });
     }
   }
+  // Provider registrations can outlive their extension event handlers on reload.
+  // A synchronous response proves the current account service is actually alive.
+  pi.events.on("vipi:codex-accounts:request", publish);
+
   async function refreshUsage(index: number, force = false, signal?: AbortSignal): Promise<Usage | undefined> {
     const who = identity(index);
     if (!who) return undefined;

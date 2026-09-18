@@ -12,7 +12,7 @@ Pi **0.84.2**의 native provider / OAuth / CredentialStore를 그대로 사용�
 ```
 
 - 계정 1은 기존 `openai-codex` 로그인이다. 다시 로그인할 필요 없다.
-- 예전 `vipi start`로 복원한 프로세스는 CLI의 확장 목록이 고정돼 있다. settings에 계정 패키지가 활성화돼 있는데 `/reload` 후에도 누락된 경우, footer가 계정 provider·명령·사용량 폴링을 함께 설치한다. 이미 로드된 경우 중복 설치하지 않는다.
+- 예전 `vipi start`로 복원한 프로세스는 CLI의 확장 목록이 고정돼 있다. settings에 계정 패키지가 활성화돼 있는데 `/reload` 후에도 누락된 경우, footer가 계정 provider·명령·사용량 폴링을 함께 설치한다. 현재 사용량 publisher에 이벤트로 응답을 요청해 살아 있는지 확인하며, 응답이 있으면 중복 설치하지 않는다. reload 후 남은 provider 등록만으로 정상 로드됐다고 판단하지 않는다.
 - 계정 2는 브라우저에서 **다른 ChatGPT 계정**으로 승인한다. 같은 계정이면 저장 전에 거부한다.
 - OAuth의 브라우저 callback/paste-code 흐름은 Pi 기본 UI를 사용한다. 두 로그인 과정을 동시에 시작하지 않는다(기본 callback 포트 공유).
 - 계정 1 재인증: `/login openai-codex`. 계정 2 해제: `/logout`에서 `Codex 계정 2` 선택.
@@ -72,6 +72,6 @@ python3 scripts/test-workspace-tui.py
 python3 scripts/test-workspace-tui.py --legacy-cli
 ```
 
-오프라인 테스트는 소진/초기화/오래된 캐시, quota에서만 1회 전환, streaming 후·취소 시 재실행 금지, 두 토큰 분리, 중복 계정 거부, 두 계정 footer, thinking 보존을 검증한다. 실제 두 계정 로그인과 한도 소진 E2E는 별도로 확인해야 한다. 한도를 테스트하려고 실제 사용량을 소진하지 않는다.
+TUI 테스트는 일반 실행과 구형 CLI 확장 목록 양쪽에서 연속 두 번 `/reload`해도 두 계정 행이 유지되는지 확인한다. 오프라인 테스트는 소진/초기화/오래된 캐시, quota에서만 1회 전환, streaming 후·취소 시 재실행 금지, 두 토큰 분리, 중복 계정 거부, 두 계정 footer, thinking 보존을 검증한다. 실제 두 계정 로그인과 한도 소진 E2E는 별도로 확인해야 한다. 한도를 테스트하려고 실제 사용량을 소진하지 않는다.
 
 해제하려면 settings의 `packages/pi-codex-accounts` 항목을 제거하고 새 Pi를 시작한다. 기본 Codex 계정 1과 legacy footer로 돌아간다. 계정 2 로그인을 제거하려면 확장이 로드된 상태에서 먼저 `/logout`을 사용한다. 인증·사용량 캐시는 공개 repo에 커밋하지 않는다.
