@@ -164,6 +164,8 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
   let active = preference.account - 1;
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
+  let ticking = false;
+  let lastPublished = "";
   const identity = (index: number) => credentialIdentity(ACCOUNT_IDS[index]);
   const statePath = (index: number) => join(STATE, `${index + 1}.json`);
   function readUsage(index: number): Usage | undefined {
@@ -187,15 +189,19 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
         email: credential?.type === "oauth" ? accountEmail(credential.access) : undefined, usage: readUsage(index) };
     });
   }
-  function publish(): void {
+  function publish(force = false): void {
     if (!stopped) {
       const values = accounts();
-      pi.events.emit("vipi:codex-accounts", { text: formatAccounts(values), rows: accountRows(values) });
+      const payload = { text: formatAccounts(values), rows: accountRows(values) };
+      const signature = JSON.stringify(payload);
+      if (!force && signature === lastPublished) return;
+      lastPublished = signature;
+      pi.events.emit("vipi:codex-accounts", payload);
     }
   }
   // Provider registrations can outlive their extension event handlers on reload.
   // A synchronous response proves the current account service is actually alive.
-  pi.events.on("vipi:codex-accounts:request", publish);
+  pi.events.on("vipi:codex-accounts:request", () => publish(true));
 
   async function refreshUsage(index: number, force = false, signal?: AbortSignal): Promise<Usage | undefined> {
     const who = identity(index);
@@ -292,12 +298,15 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
   });
 
   async function tick(): Promise<void> {
+    if (ticking || stopped) return;
+    ticking = true;
     try { await Promise.all(ACCOUNT_IDS.map((_id, index) => refreshUsage(index))); publish(); } catch { /* Cache failure must not interrupt chat. */ }
+    finally { ticking = false; }
   }
   function start(): void {
     stopped = false;
     if (timer) clearInterval(timer);
-    publish();
+    publish(true);
     void tick();
     timer = setInterval(() => { void tick(); }, 15_000);
     timer.unref?.();

@@ -17,7 +17,7 @@ Read README.md before changing or installing this repository. The repo is PUBLIC
 3. Run `python3 scripts/check.py`, `python3 scripts/setup.py` (dry run), then explicit `--apply` only when authorized.
 4. After npm adapter reinstall, run `sh scripts/patch-mcp.sh`; reject version mismatches.
 5. Before push, inspect staged diff for secrets and machine paths. Never add `~/.pi/agent` wholesale.
-6. Workspace changes must pass `scripts/test-workspace.py` and `scripts/test-workspace-tui.py`. Never test server destruction on the user's default tmux socket.
+6. Workspace changes must pass `scripts/test-workspace.py` and `scripts/test-workspace-tui.py`. Sidebar changes also require `scripts/test-tree-lifecycle.py` (idle redraw, input, orphan cleanup). Read `docs/performance-audit.md` before changing polling/lifetime. Never test server destruction on the user's default tmux socket.
 7. State which checks actually ran. Tests here are offline configuration/structure checks, not full TUI or provider authentication tests.
 
 Keep regular TUI, explicit REVIEW, fixed 45-column tree, Astra/high default, Korean Direct, and disabled IME switching unless requested otherwise. Do not delete permanent integration branches. Do not rewrite the private submodule remote to a local filesystem URL. Runtime registries, sessions, auth, APNs keys, MCP cache, attachments, model caches, and iOS pairing tokens stay outside this repository.

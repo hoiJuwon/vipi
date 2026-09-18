@@ -29,7 +29,7 @@ vipi install-autostart
 - 기존 Pi JSONL에 저장된 모델·thinking·대화 분기 상태
 - 독립된 45칸 세션 트리와 새 tmux pane
 
-`vipi start`가 15초 간격 checkpoint watcher를 시작한다. watcher는 Pi에 키나 프롬프트를 보내지 않고 registry와 tmux metadata만 읽는다. OS file lock으로 같은 상태 디렉터리의 watcher와 restore를 직렬화한다. 저장은 `0600` 파일 + atomic rename + fsync 방식이다.
+`vipi start`가 15초 간격 checkpoint watcher를 시작한다. 구성에 변화가 없으면 파일 재작성/fsync는 생략한다. `savedAt`은 마지막 구성 변경 저장 시각이며 대화의 마지막 저장 시각이 아니다. watcher는 Pi에 키나 프롬프트를 보내지 않고 registry와 tmux metadata만 읽는다. OS file lock으로 같은 상태 디렉터리의 watcher와 restore를 직렬화한다. 저장은 `0600` 파일 + atomic rename + fsync 방식이다.
 
 상태 파일은 **repo 밖**에 둔다:
 

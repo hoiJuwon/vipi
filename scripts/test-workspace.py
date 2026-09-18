@@ -49,6 +49,9 @@ with tempfile.TemporaryDirectory(prefix='vipi-workspace-test-') as directory:
         assert len([p for p in m.panes() if p['session_name'] == 'test']) == 2
         saved = m.checkpoint()
         assert len(saved['sessions']) == 2
+        saved_mtime = m.MANIFEST.stat().st_mtime_ns
+        assert m.checkpoint() == saved
+        assert m.MANIFEST.stat().st_mtime_ns == saved_mtime, 'unchanged workspace must not rewrite/fsync'
         assert m.MANIFEST.stat().st_mode & 0o777 == 0o600
         m.tmux('kill-server')  # Never touches the real/default tmux server.
         assert m.checkpoint() == saved, 'server loss must not erase snapshot'

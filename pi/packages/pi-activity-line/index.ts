@@ -86,6 +86,7 @@ export default function activityLine(pi: ExtensionAPI): void {
   let enabled = true;
   let timer: NodeJS.Timeout | undefined;
   let currentContext: ExtensionContext | undefined;
+  let lastMessage: string | undefined;
 
   function latestTool(): ActiveTool | undefined {
     return [...activeTools.values()].sort((a, b) => b.sequence - a.sequence)[0];
@@ -106,7 +107,10 @@ export default function activityLine(pi: ExtensionAPI): void {
     } else {
       label = "Thinking";
     }
-    ctx.ui.setWorkingMessage(`${label} · ${formatElapsed(Date.now() - startedAt)}`);
+    const message = `${label} · ${formatElapsed(Date.now() - startedAt)}`;
+    if (message === lastMessage) return;
+    lastMessage = message;
+    ctx.ui.setWorkingMessage(message);
   }
 
   function startTimer(): void {
@@ -124,6 +128,7 @@ export default function activityLine(pi: ExtensionAPI): void {
   function setPhase(next: Phase, ctx: ExtensionContext): void {
     if (phase !== next) phaseStartedAt = Date.now();
     phase = next;
+    if (next === "idle") lastMessage = undefined;
     currentContext = ctx;
     if (next === "idle") {
       stopTimer();
@@ -143,6 +148,7 @@ export default function activityLine(pi: ExtensionAPI): void {
     stopTimer();
     if (ctx.mode !== "tui") return;
     currentContext = ctx;
+    lastMessage = undefined;
     ctx.ui.setWorkingMessage();
   });
 
@@ -214,6 +220,7 @@ export default function activityLine(pi: ExtensionAPI): void {
         }
       } else {
         stopTimer();
+        lastMessage = undefined;
         ctx.ui.setWorkingMessage();
       }
       ctx.ui.notify(`Activity line ${enabled ? "enabled" : "disabled"}.`, "info");

@@ -28,7 +28,8 @@ vim.opt.showmode = false
 vim.opt.ruler = false
 vim.opt.cmdheight = 0
 vim.opt.fillchars:append({ eob = " " })
-vim.opt.statusline = "  j/k move  ↵ open/reopen  n new  a workspace  r rename  x delete  q quit"
+local default_statusline = "  j/k move  ↵ open/reopen  n new  a workspace  r rename  x delete  q quit"
+vim.opt.statusline = default_statusline
 
 vim.api.nvim_set_hl(0, "PiTreeCursor", { bg = "#303030", ctermbg = 236 })
 vim.api.nvim_set_hl(0, "PiTreeSelected", { bg = "#303030", ctermbg = 236 })
@@ -55,24 +56,61 @@ local selected_pane = nil
 local selected_workspace = nil
 local cached_live_panes = {}
 local live_panes_checked_at = 0
-local cached_active_panes = {}
-local active_panes_checked_at = 0
-local previous_status = {}
 local cached_permission_panes = {}
-local permission_panes_checked_at = 0
+local cached_owner = ""
+local cached_tree_active = false
+local cached_visible = true
+local cached_navigation = ""
 local last_navigation_request = ""
 local last_owner = nil
+local closing, busy, scheduled, refreshing = false, false, false, false
+local timer, poll_job
+local parent_pid = uv.os_getppid()
+local rendered_lines, rendered_styles = {}, {}
+local last_error_at = -10000
+
+local function stop()
+  closing = true
+  if timer then timer:stop(); timer:close(); timer = nil end
+  if poll_job then pcall(function() poll_job:kill(15) end); poll_job = nil end
+end
+
+local function running()
+  if closing or vim.v.dying > 0 or (vim.v.exiting ~= vim.NIL and vim.v.exiting ~= nil) then
+    stop()
+    return false
+  end
+  return vim.api.nvim_buf_is_valid(buffer)
+end
+
+-- Register BEFORE startup IO. UI loss and wiped buffers must stop queued work,
+-- not just the timer: VimLeavePre can be too late during an error/exit loop.
+vim.api.nvim_create_autocmd({ "VimLeavePre", "UILeave" }, { callback = stop })
+vim.api.nvim_create_autocmd("BufWipeout", { buffer = buffer, callback = stop })
+
+local function report_error(error)
+  if not running() or uv.now() - last_error_at < 10000 then return end
+  last_error_at = uv.now()
+  -- No hit-enter prompt from a background callback; keep navigation usable.
+  vim.g.pi_tree_last_error = tostring(error)
+  vim.opt.statusline = " Tree refresh failed; retrying (pi_tree_last_error)"
+end
 
 local function tmux(args, timeout)
+  if not running() then return 1, "", "tree is closing" end
   local command = { "tmux" }
   vim.list_extend(command, args)
-  local result = vim.system(command, { text = true }):wait(timeout or 3000)
+  local ok, result = pcall(function() return vim.system(command, { text = true }):wait(timeout or 1000) end)
+  if not ok then return 1, "", tostring(result) end
   return result.code or 1, result.stdout or "", result.stderr or ""
 end
 
 local function enforce_sidebar_width(pane)
   if pane == "" then return end
-  tmux({ "resize-pane", "-t", pane, "-x", tostring(sidebar_width) })
+  local code, width = tmux({ "display-message", "-p", "-t", pane, "#{pane_width}" })
+  if code == 0 and tonumber(vim.trim(width)) ~= sidebar_width then
+    tmux({ "resize-pane", "-t", pane, "-x", tostring(sidebar_width) })
+  end
 end
 
 local function canonical(path)
@@ -182,17 +220,7 @@ local function register_workspace(path)
   return path
 end
 
-local function live_panes()
-  local now = uv.now()
-  if now - live_panes_checked_at < 2000 then return cached_live_panes end
-  live_panes_checked_at = now
-  local code, stdout = tmux({ "list-panes", "-a", "-F", "#{pane_id}" })
-  if code ~= 0 then return cached_live_panes end
-  local live = {}
-  for pane in stdout:gmatch("[^\r\n]+") do live[pane] = true end
-  cached_live_panes = live
-  return live
-end
+local function live_panes() return cached_live_panes end
 
 local function process_alive(pid)
   pid = tonumber(pid)
@@ -201,22 +229,7 @@ local function process_alive(pid)
   return ok and result == 0
 end
 
-local function active_panes()
-  local now = uv.now()
-  if now - active_panes_checked_at < 500 then return cached_active_panes end
-  active_panes_checked_at = now
-  local code, stdout = tmux({ "list-clients", "-F", "#{pane_id}" })
-  if code ~= 0 then return cached_active_panes end
-  local active = {}
-  for pane in stdout:gmatch("[^\r\n]+") do active[pane] = true end
-  cached_active_panes = active
-  return active
-end
-
-local function owner_pane()
-  local _, stdout = tmux({ "show-options", "-p", "-v", "-t", tree_pane, "@pi_session_tree_owner" })
-  return vim.trim(stdout)
-end
+local function owner_pane() return cached_owner end
 
 local function display_name(entry)
   local name = type(entry.name) == "string" and vim.trim(entry.name) or ""
@@ -225,21 +238,7 @@ local function display_name(entry)
   return name
 end
 
-local function permission_panes()
-  local now = uv.now()
-  if now - permission_panes_checked_at < 300 then return cached_permission_panes end
-  permission_panes_checked_at = now
-  local code, stdout = tmux({ "list-panes", "-a", "-F", "#{pane_id}\t#{@pi_permission_waiting}" }, 300)
-  if code ~= 0 then return cached_permission_panes end
-  local waiting = {}
-  for line in stdout:gmatch("[^\r\n]+") do
-    local pane, state = line:match("^([^\t]+)\t(.*)$")
-    local publisher_pid = vim.trim(state or ""):match("^mcp:(%d+)$")
-    if pane and publisher_pid and process_alive(publisher_pid) then waiting[pane] = true end
-  end
-  cached_permission_panes = waiting
-  return waiting
-end
+local function permission_panes() return cached_permission_panes end
 
 local function pane_waits_for_permission(entry)
   return entry.live == true
@@ -301,38 +300,27 @@ local function truncate_display(text, maximum)
 end
 
 local function refresh()
-  if not vim.api.nvim_buf_is_valid(buffer) then return end
+  if not running() then return end
   local live = live_panes()
-  local active = active_panes()
   local registry = merged_entries()
   local workspaces = read_workspaces()
   local workspace_set = {}
   for _, workspace in ipairs(workspaces) do workspace_set[canonical(workspace)] = true end
   local next_entries = {}
-  local registry_changed = false
 
   for _, entry in ipairs(registry) do
     local entry_cwd = type(entry) == "table" and type(entry.cwd) == "string" and canonical(entry.cwd) or nil
     local session_exists = type(entry.sessionFile) == "string" and vim.fn.filereadable(entry.sessionFile) == 1
     entry.live = live[entry.tmuxPaneId] == true and process_alive(entry.pid)
-    if entry_cwd and session_exists and (inside_root(entry_cwd) or workspace_set[entry_cwd]) then
-      local previous = previous_status[entry.piSessionId]
-      if entry.live and active[entry.tmuxPaneId] and entry.unread then
-        entry.unread = false
-        registry_changed = true
-      elseif entry.live and previous == "working" and entry.status ~= "working" and not active[entry.tmuxPaneId] then
-        entry.unread = true
-        registry_changed = true
-      end
-      previous_status[entry.piSessionId] = entry.status
+    -- A live session may not have flushed a JSONL yet. Do not hide new rows.
+    if entry_cwd and (session_exists or entry.live) and (inside_root(entry_cwd) or workspace_set[entry_cwd]) then
       table.insert(next_entries, entry)
     end
   end
-  if registry_changed then pcall(write_registry, registry) end
-
+  -- Pi owns working/unread lifecycle. Read-only polling must not race other
+  -- writers by replacing the entire registry on every tree refresh.
   local owner = owner_pane()
-  local _, active_value = tmux({ "display-message", "-p", "-t", tree_pane, "#{pane_active}" })
-  local tree_is_active = vim.trim(active_value) == "1"
+  local tree_is_active = cached_tree_active
   if owner ~= "" and (owner ~= last_owner or not tree_is_active) then
     selected_pane = owner
     selected_workspace = nil
@@ -376,6 +364,7 @@ local function refresh()
   local new_line_to_workspace = {}
   local group_lines = {}
   local icon_columns = {}
+  local styles = {}
   local selected_line = nil
   local session_index = 0
   local number_width = math.max(1, #tostring(#entries))
@@ -387,7 +376,8 @@ local function refresh()
     if selected_workspace == group.cwd then selected_line = #lines end
     for _, entry in ipairs(group.entries) do
       session_index = session_index + 1
-      local icon = status_for(entry, owner)
+      local icon, style = status_for(entry, owner)
+      styles[#lines + 1] = style
       local prefix = string.format("    %" .. number_width .. "d ", session_index)
       local name_width = math.max(1, pane_width - vim.fn.strdisplaywidth(prefix) - vim.fn.strdisplaywidth(icon) - status_right_margin - 1)
       local left = prefix .. truncate_display(display_name(entry), name_width)
@@ -416,26 +406,36 @@ local function refresh()
     selected_line = available[1]
   end
 
-  vim.bo[buffer].modifiable = true
-  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
-  vim.bo[buffer].modifiable = false
   line_to_entry = new_line_to_entry
   line_to_workspace = new_line_to_workspace
-
-  vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1)
-  vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeHeader", 0, 1, -1)
-  vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeRoot", 1, 1, -1)
-  vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeIdle", 2, 1, -1)
-  for line, _ in pairs(group_lines) do
-    vim.api.nvim_buf_add_highlight(buffer, namespace, "Directory", line - 1, 2, -1)
+  styles.selected = selected_line
+  if vim.deep_equal(lines, rendered_lines) and vim.deep_equal(styles, rendered_styles) then return end
+  local old_lines, old_styles = rendered_lines, rendered_styles
+  vim.bo[buffer].modifiable = true
+  if #lines ~= #rendered_lines then
+    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+  else
+    -- Spinner changes only its row, not every line and viewport each tick.
+    for index, line in ipairs(lines) do
+      if line ~= rendered_lines[index] then vim.api.nvim_buf_set_lines(buffer, index - 1, index, false, { line }) end
+    end
   end
-  for line, entry in pairs(line_to_entry) do
-    local _, highlight = status_for(entry, owner)
-    local columns = icon_columns[line]
-    vim.api.nvim_buf_add_highlight(buffer, namespace, highlight, line - 1, columns.start, columns.finish)
-  end
-  if selected_line then
-    vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeSelected", selected_line - 1, 0, -1)
+  vim.bo[buffer].modifiable = false
+  rendered_lines, rendered_styles = lines, styles
+  if #lines ~= #old_lines then vim.api.nvim_buf_clear_namespace(buffer, namespace, 0, -1) end
+  for line, text in ipairs(lines) do
+    if #lines ~= #old_lines or text ~= old_lines[line] or styles[line] ~= old_styles[line]
+        or (selected_line ~= old_styles.selected and (line == selected_line or line == old_styles.selected)) then
+      vim.api.nvim_buf_clear_namespace(buffer, namespace, line - 1, line)
+      if line == 1 then vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeHeader", 0, 1, -1)
+      elseif line == 2 then vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeRoot", 1, 1, -1)
+      elseif line == 3 then vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeIdle", 2, 1, -1)
+      elseif group_lines[line] then vim.api.nvim_buf_add_highlight(buffer, namespace, "Directory", line - 1, 2, -1)
+      end
+      local columns = icon_columns[line]
+      if columns then vim.api.nvim_buf_add_highlight(buffer, namespace, styles[line], line - 1, columns.start, columns.finish) end
+      if line == selected_line then vim.api.nvim_buf_add_highlight(buffer, namespace, "PiTreeSelected", line - 1, 0, -1) end
+    end
   end
 
   if selected_line then
@@ -446,7 +446,9 @@ local function refresh()
       selected_workspace = line_to_workspace[selected_line]
       selected_pane = nil
     end
-    pcall(vim.api.nvim_win_set_cursor, 0, { selected_line, 0 })
+    if vim.api.nvim_win_get_cursor(0)[1] ~= selected_line then
+      pcall(vim.api.nvim_win_set_cursor, 0, { selected_line, 0 })
+    end
   end
 end
 
@@ -571,6 +573,7 @@ local function launch_session(entry)
   entry.status = "idle"
   entry.unread = false
   entry.live = true
+  cached_live_panes[pane] = true
   local all_entries = read_registry()
   for _, candidate in ipairs(all_entries) do
     if candidate.piSessionId == entry.piSessionId then
@@ -725,6 +728,7 @@ local function new_session()
     end
     if not replaced then table.insert(entries, pending) end
     write_registry(entries)
+    cached_live_panes[pane] = true
     live_panes_checked_at = 0
     refresh()
     move_tree_and_focus({
@@ -774,6 +778,10 @@ end
 local function delete_selected()
   local entry = entry_under_cursor()
   if not entry then return end
+  if type(entry.sessionFile) ~= "string" or vim.fn.filereadable(entry.sessionFile) ~= 1 then
+    vim.notify("Session is not saved yet; finish its response before deleting", vim.log.levels.WARN)
+    return
+  end
   local prompt = "Delete session permanently?\n" .. display_name(entry)
   if vim.fn.confirm(prompt, "&No\n&Delete", 1) ~= 2 then return end
 
@@ -821,7 +829,7 @@ local function delete_selected()
   refresh()
 end
 
-local function close_tree() vim.cmd("qa!") end
+local function close_tree() stop(); vim.cmd("qa!") end
 
 local function session_tab(direction, requested_count)
   local lines = {}
@@ -856,45 +864,60 @@ local function session_tab(direction, requested_count)
   move_tree_and_focus(line_to_entry[target_line])
 end
 
-local map_options = { buffer = buffer, silent = true, nowait = true }
-vim.keymap.set("n", "j", function() move_selection(1) end, map_options)
-vim.keymap.set("n", "k", function() move_selection(-1) end, map_options)
-vim.keymap.set("n", "g", function()
+local function action(fn)
+  return function(...)
+    if busy or not running() then return end
+    busy = true
+    local ok, error = pcall(fn, ...)
+    busy = false
+    if not ok then report_error(error) end
+  end
+end
+local function map(key, fn)
+  vim.keymap.set("n", key, action(function(...)
+    cached_tree_active = true -- receipt of a tree key is authoritative, unlike a stale poll
+    fn(...)
+    if running() then refresh() end -- update selection now, not one timer tick later
+  end), { buffer = buffer, silent = true, nowait = true })
+end
+map("j", function() move_selection(1) end)
+map("k", function() move_selection(-1) end)
+map("g", function()
   local lines = action_lines()
   if lines[1] then
     vim.api.nvim_win_set_cursor(0, { lines[1], 0 })
     selected_pane = line_to_entry[lines[1]] and line_to_entry[lines[1]].tmuxPaneId or nil
     selected_workspace = line_to_workspace[lines[1]]
   end
-end, map_options)
-vim.keymap.set("n", "G", function()
+end)
+map("G", function()
   local lines = action_lines()
   if lines[#lines] then
     vim.api.nvim_win_set_cursor(0, { lines[#lines], 0 })
     selected_pane = line_to_entry[lines[#lines]] and line_to_entry[lines[#lines]].tmuxPaneId or nil
     selected_workspace = line_to_workspace[lines[#lines]]
   end
-end, map_options)
-vim.keymap.set("n", "<CR>", open_selected, map_options)
-vim.keymap.set("n", "l", open_selected, map_options)
-vim.keymap.set("n", "<LeftMouse>", function()
+end)
+map("<CR>", open_selected)
+map("l", open_selected)
+map("<LeftMouse>", function()
   local mouse = vim.fn.getmousepos()
   if mouse.winid ~= vim.api.nvim_get_current_win() or mouse.line < 1 then return end
   vim.api.nvim_win_set_cursor(0, { mouse.line, 0 })
   open_selected()
-end, map_options)
-vim.keymap.set("n", "gt", function() session_tab(1) end, map_options)
-vim.keymap.set("n", "gT", function() session_tab(-1) end, map_options)
-vim.keymap.set("n", "n", new_session, map_options)
-vim.keymap.set("n", "a", add_workspace, map_options)
-vim.keymap.set("n", "r", rename_selected, map_options)
-vim.keymap.set("n", "x", delete_selected, map_options)
-vim.keymap.set("n", "q", close_tree, map_options)
-vim.keymap.set("n", "<Esc>", close_tree, map_options)
+end)
+map("gt", function() session_tab(1) end)
+map("gT", function() session_tab(-1) end)
+map("n", new_session)
+map("a", add_workspace)
+map("r", rename_selected)
+map("x", delete_selected)
+map("q", close_tree)
+map("<Esc>", close_tree)
 
 vim.api.nvim_create_autocmd("VimResized", {
   callback = function()
-    vim.schedule(function() enforce_sidebar_width(tree_pane) end)
+    vim.schedule(function() if running() then enforce_sidebar_width(tree_pane) end end)
   end,
 })
 
@@ -914,8 +937,7 @@ vim.api.nvim_create_autocmd("CursorMoved", {
 })
 
 local function process_navigation_request()
-  local _, raw = tmux({ "show-options", "-p", "-v", "-t", tree_pane, "@pi_session_tree_navigation" })
-  raw = vim.trim(raw)
+  local raw = cached_navigation
   if raw == "" or raw == last_navigation_request then return end
   last_navigation_request = raw
   local ok, request = pcall(vim.json.decode, raw)
@@ -925,18 +947,71 @@ local function process_navigation_request()
   elseif request.direction == -1 then session_tab(-1, count) end
 end
 
+local snapshot_format = table.concat({
+  "#{pane_id}", "#{pane_pid}", "#{pane_dead}", "#{window_active}", "#{session_attached}",
+  "#{pane_active}", "#{@pi_session_tree_owner}", "#{@pi_permission_waiting}", "#{@pi_session_tree_navigation}",
+}, "\t")
+local ready = false
+local function poll()
+  if busy or refreshing or poll_job or not running() then return end
+  local now = uv.now()
+  if live_panes_checked_at > 0 and now - live_panes_checked_at < (cached_visible and 250 or 2000) then return end
+  live_panes_checked_at = now
+  -- One async snapshot replaces per-row/per-feature synchronous tmux calls.
+  poll_job = vim.system({ "tmux", "list-panes", "-a", "-F", snapshot_format }, { text = true, timeout = 800 }, function(result)
+    vim.schedule(function()
+      poll_job = nil
+      if not running() or busy then return end
+      if result.code ~= 0 then return end -- transient tmux timeout: retain last good screen
+      local live, waiting = {}, {}
+      local self_found = false
+      for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+        local fields = vim.split(line, "\t", { plain = true })
+        local pane = fields[1]
+        if fields[3] == "0" then live[pane] = true end
+        local publisher = (fields[8] or ""):match("^mcp:(%d+)$")
+        if publisher and process_alive(publisher) then waiting[pane] = true end
+        if pane == tree_pane then
+          self_found = true
+          cached_owner = fields[7] or ""
+          cached_tree_active = fields[6] == "1"
+          cached_visible = fields[4] == "1" and (tonumber(fields[5]) or 0) > 0
+          cached_navigation = fields[9] or ""
+        end
+      end
+      if not self_found then stop(); vim.cmd("qa!"); return end
+      cached_live_panes, cached_permission_panes = live, waiting
+      if not cached_visible and ready then return end
+      refreshing = true
+      local ok, error = pcall(function()
+        refresh()
+        action(process_navigation_request)()
+        if not ready then
+          ready = true
+          tmux({ "set-option", "-p", "-t", tree_pane, "@pi_session_tree_ready", "1" })
+        end
+      end)
+      refreshing = false
+      if not ok then report_error(error)
+      elseif vim.opt.statusline:get() ~= default_statusline then vim.opt.statusline = default_statusline end
+    end)
+  end)
+end
+
 register_workspace(canonical_root)
 enforce_sidebar_width(tree_pane)
-refresh()
-tmux({ "set-option", "-p", "-t", tree_pane, "@pi_session_tree_ready", "1" })
-local timer = uv.new_timer()
-timer:start(250, 250, vim.schedule_wrap(function()
-  refresh()
-  process_navigation_request()
-end))
-vim.api.nvim_create_autocmd("VimLeavePre", {
-  once = true,
-  callback = function()
-    if timer then timer:stop(); timer:close(); timer = nil end
-  end,
-})
+timer = uv.new_timer()
+timer:start(0, 250, function()
+  -- Nvim's terminal UI is a parent process of its --embed worker. SIGKILL or
+  -- tmux pane removal can bypass VimLeavePre. This scratch tree owns no user
+  -- buffer: exit directly if its original parent disappears, even in an exit loop.
+  if uv.os_getppid() ~= parent_pid then stop(); os.exit(0) end
+  if closing or scheduled then return end
+  scheduled = true
+  vim.schedule(function()
+    scheduled = false
+    if not running() then return end
+    local ok, error = pcall(poll)
+    if not ok then report_error(error) end
+  end)
+end)

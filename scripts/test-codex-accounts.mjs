@@ -136,11 +136,13 @@ try {
 
   // Footer must not mutate the user's high thinking setting on session_start.
   const { default: footer } = await jiti.import('../pi/packages/pi-clean-footer/index.ts');
-  const footerEvents = new Map(), footerHooks = new Map(); let component;
+  const footerEvents = new Map(), footerHooks = new Map(); let component, renders = 0;
   footer({ getThinkingLevel: () => 'high', setThinkingLevel: () => assert.fail('footer must not change thinking'),
     on: (e, fn) => footerHooks.set(e, fn), events: { on: (e, fn) => footerEvents.set(e, fn), emit: (e, data) => footerEvents.get(e)?.(data) } });
   footerEvents.get('vipi:codex-accounts')({ rows });
-  await footerHooks.get('session_start')({}, { mode: 'tui', ui: { setFooter: factory => { component = factory({ requestRender() {} }, { fg: (_color, text) => text }); } } });
+  await footerHooks.get('session_start')({}, { mode: 'tui', ui: { setFooter: factory => { component = factory({ requestRender() { renders++; } }, { fg: (_color, text) => text }); } } });
+  footerEvents.get('vipi:codex-accounts')({ rows });
+  assert.equal(renders, 0, 'unchanged account data must not schedule a redraw');
   const rendered = component.render(120);
   assert.equal(rendered.length, 2);
   assert.match(rendered[0], /^NORMAL\s+roy@example.com \| Usage 46% Left$/);
@@ -154,5 +156,21 @@ try {
   }
   assert.equal(vimStateFromFooter('NORMAL    Thinking: high  Weekly Usage Limit: 43% remaining'), 'normal');
   assert.equal(vimStateFromFooter('no footer'), undefined);
-  console.log('PASS: quota parsing/reset/staleness, confirmed-only failover, no replay after output, abort, duplicate account guard, isolated tokens/session IDs, both-account footer, thinking preserved');
+  const { default: activity } = await jiti.import('../pi/packages/pi-activity-line/index.ts');
+  const activityHooks = new Map(), updates = [];
+  activity({ on: (e, fn) => activityHooks.set(e, fn), registerCommand() {} });
+  const ctx = { mode: 'tui', ui: { setWorkingMessage: value => updates.push(value), setWorkingVisible() {} } };
+  const originalNow = Date.now;
+  try {
+    Date.now = () => now;
+    activityHooks.get('session_start')({}, ctx);
+    activityHooks.get('agent_start')({}, ctx);
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert.equal(updates.filter(Boolean).length, 1, 'same activity text must not redraw every timer tick');
+    activityHooks.get('agent_settled')({}, ctx);
+    const count = updates.length;
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(updates.length, count, 'idle must not leave an activity timer running');
+  } finally { Date.now = originalNow; activityHooks.get('session_shutdown')({}, ctx); }
+  console.log('PASS: account routing/footer regressions; unchanged account/activity display does not redraw; idle timers stopped');
 } finally { rmSync(home, { recursive: true, force: true }); }

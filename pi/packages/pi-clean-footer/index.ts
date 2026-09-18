@@ -73,6 +73,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
     if (typeof payload !== "object" || payload === null) return;
     const rows = (payload as { rows?: unknown }).rows;
     if (!Array.isArray(rows) || rows.length !== 2 || !rows.every(row => row && typeof row.text === "string" && typeof row.active === "boolean")) return;
+    if (JSON.stringify(accountRows) === JSON.stringify(rows)) return;
     accountRows = rows;
     requestRender?.();
   });
@@ -81,6 +82,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
     if (typeof payload !== "object" || payload === null) return;
     const value = payload as { text?: unknown; mode?: unknown };
     if (typeof value.text !== "string" || typeof value.mode !== "string") return;
+    if (vimStatus.text === value.text && vimStatus.mode === value.mode) return;
     vimStatus = { text: value.text, mode: value.mode };
     requestRender?.();
   });

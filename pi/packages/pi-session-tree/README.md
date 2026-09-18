@@ -17,7 +17,7 @@ From pi-vim NORMAL mode:
 
 `:e .` creates a real fixed 45-column tmux pane on the left. The tree restores that width after terminal/client resizing and when reusing an existing tree pane, so every session keeps the same sidebar size. Running it again from Pi closes every persistent tree pane in the current tmux session, so the sidebar toggles as one UI instead of leaving stale per-window copies. `q` or `Esc` inside a tree closes that window's copy. Pi remains in regular TUI mode, reflows to the available width, and retains tmux copy-mode history. On the first visit to another tmux window, the tree prepares a separate sidebar in that off-screen window; later switches reuse both layouts instead of moving the pane with `join-pane`, avoiding the intermediate full-screen reflow/flash.
 
-Every existing Pi session file remains visible until it is explicitly deleted, including sessions whose Pi process exited with `:q` or whose tmux pane disappeared. Sessions remain grouped first by their exact launch directory. Within each workspace they are grouped by topic in `개발 → 마케팅 → 분석 → other/custom topics → 기타` order, with `기타` always last; unlisted topics are ordered by topic name, and sessions within the same topic retain creation order. Status and selection never reorder them, while an explicit category rename intentionally moves the row into its new topic group. Workspace headings and the root label show at most the final three path components (the workspace plus its parent and grandparent). Registered workspaces remain visible with `세션 없음` even when no Pi is running. Workspace headings and session rows are selectable; `n` defaults to the selected workspace. Each session gets a sequential number on the left, while dormant/idle/working/unread state is aligned three cells in from the right pane edge. The selected row gets a full-width ANSI-236 (`#303030`) gray background.
+Live/new sessions are shown even before their first JSONL flush; deleting such an unsaved row is blocked until its response is saved. Every existing Pi session file remains visible until it is explicitly deleted, including sessions whose Pi process exited with `:q` or whose tmux pane disappeared. Sessions remain grouped first by their exact launch directory. Within each workspace they are grouped by topic in `개발 → 마케팅 → 분석 → other/custom topics → 기타` order, with `기타` always last; unlisted topics are ordered by topic name, and sessions within the same topic retain creation order. Status and selection never reorder them, while an explicit category rename intentionally moves the row into its new topic group. Workspace headings and the root label show at most the final three path components (the workspace plus its parent and grandparent). Registered workspaces remain visible with `세션 없음` even when no Pi is running. Workspace headings and session rows are selectable; `n` defaults to the selected workspace. Each session gets a sequential number on the left, while dormant/idle/working/unread state is aligned three cells in from the right pane edge. The selected row gets a full-width ANSI-236 (`#303030`) gray background.
 
 ## Tree keys
 
@@ -65,6 +65,14 @@ The initially inferred topic remains fixed during automatic naming and status re
 - all status glyphs share one fixed right-aligned column with a three-cell right margin; current selection is indicated only by its gray row background
 
 Selecting a session marks it read. An unread session also clears automatically when its Pi pane becomes the active tmux client pane.
+
+## Performance and lifetime
+
+Periodic refresh is read-only and uses one asynchronous tmux snapshot, at most every 250ms while visible and every 2 seconds while hidden. Hidden trees do not render; unchanged visible output does not rewrite buffer/highlights/cursor. Changed spinner/selection rows are updated individually. Input/rename/confirm actions pause periodic work, pending timer callbacks are coalesced, and only one poll can be in flight.
+
+Cleanup is registered before startup IO. UI detach, buffer wipe, exiting/dying state and normal leave stop the timer, cancel the snapshot process, and reject queued work. A worker whose original TUI parent disappears exits directly (scratch tree only). Background errors do not open hit-enter prompts; inspect `vim.g.pi_tree_last_error` if the tree statusline reports a refresh error.
+
+Run `python3 scripts/test-tree-lifecycle.py` from the repo root for real Neovim/tmux tests, including render-error + pane removal and parent SIGKILL. [Audit, measurements, residual risks](../../../docs/performance-audit.md).
 
 ## Storage and access
 

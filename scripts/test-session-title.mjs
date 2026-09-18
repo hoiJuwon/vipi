@@ -2,7 +2,7 @@
 // Uses the installed Pi's loader; no new dependencies or live model calls.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,6 +11,8 @@ const { createJiti } = await import(pathToFileURL(join(piRoot, 'node_modules/jit
 const home = mkdtempSync(join(tmpdir(), 'vipi-title-test-'));
 const originalHome = process.env.HOME;
 const originalTmux = process.env.TMUX;
+const originalPath = process.env.PATH;
+const originalPane = process.env.TMUX_PANE;
 const originalTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 process.env.HOME = home;
 process.env.TMUX = 'fixture';
@@ -18,10 +20,10 @@ Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true
 try {
   const jiti = createJiti(import.meta.url, { alias: { '@earendil-works/pi-coding-agent': join(piRoot, 'dist/index.js') } });
   const { default: extension } = await jiti.import('../pi/packages/pi-session-tree/index.ts');
-  const hooks = new Map(), commands = new Map(), notices = [], prompts = [];
+  const hooks = new Map(), commands = new Map(), events = new Map(), notices = [], prompts = [];
   let name, sessionId = 'fixture', reply = { stopReason: 'stop', content: [{ type: 'text', text: '디스크 정리 후보 점검' }] };
   let duringRequest = () => {};
-  const pi = { on: (event, fn) => hooks.set(event, fn), events: { on() {} },
+  const pi = { on: (event, fn) => hooks.set(event, fn), events: { on: (event, fn) => events.set(event, fn) },
     registerCommand: (id, command) => commands.set(id, command), getSessionName: () => name, setSessionName: (value) => { name = value; } };
   extension(pi);
   const first = '컴퓨터 용량 문제 한번 체크해줘. 안쓰는거 있는지 전체적으로 검수해줘. 지울만한 것들 리스트업해줘.';
@@ -57,9 +59,30 @@ try {
   reply = { stopReason: 'stop', content: [{ type: 'text', text: '요약 완료' }] };
   duringRequest = () => writeFileSync(registry, JSON.stringify({ entries: [{ piSessionId: 'fixture', name: '개발 / 트리 직접 지정', cwd: home, tmuxSession: 'test', tmuxWindow: '1', tmuxPaneId: '%1', pid: 1, lastSeen: new Date().toISOString() }] }));
   await commands.get('retitle').handler('', ctx); assert.equal(name, '개발 / 직접 지정', 'tree rename wins over pending AI');
-  console.log('PASS: provider error, retry, first-request summary, stable name, retitle, manual/tree rename and session-switch guards');
+  const bin = join(home, 'bin'); mkdirSync(bin);
+  const log = join(home, 'tmux-calls'); writeFileSync(log, '');
+  writeFileSync(join(bin, 'tmux'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(log)},process.argv.slice(2).join(' ')+'\\n');setTimeout(()=>{},60);\n`, { mode: 0o700 });
+  process.env.PATH = bin + ':' + originalPath; process.env.TMUX_PANE = '%fixture';
+  await hooks.get('session_start')({}, ctx);
+  for (let i = 0; i < 100; i++) events.get('pi-vim:status-line')({ text: 'NORMAL', mode: 'normal' });
+  events.get('pi-vim:mode-change')({ mode: 'insert' });
+  events.get('pi-vim:mode-change')({ mode: 'normal' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  let writes = readFileSync(log, 'utf8').split('\n').filter(line => line.includes('@pi_vim_state'));
+  assert.equal(writes.length, 1, 'duplicate status events must not spawn tmux');
+  assert.ok(writes.at(-1).endsWith(' normal'));
+  events.get('pi-vim:mode-change')({ mode: 'insert' });
+  events.get('pi-vim:mode-change')({ mode: 'normal' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  writes = readFileSync(log, 'utf8').split('\n').filter(line => line.includes('@pi_vim_state'));
+  assert.equal(writes.length, 3);
+  assert.ok(writes.at(-1).endsWith(' normal'), 'state writes must remain ordered');
+  hooks.get('session_shutdown')();
+  console.log('PASS: naming regressions; 100 identical Vim status events => one tmux write; ordered final NORMAL');
 } finally {
   process.env.HOME = originalHome;
+  process.env.PATH = originalPath;
+  if (originalPane === undefined) delete process.env.TMUX_PANE; else process.env.TMUX_PANE = originalPane;
   if (originalTmux === undefined) delete process.env.TMUX; else process.env.TMUX = originalTmux;
   if (originalTTY) Object.defineProperty(process.stdout, 'isTTY', originalTTY); else delete process.stdout.isTTY;
   rmSync(home, { recursive: true, force: true });

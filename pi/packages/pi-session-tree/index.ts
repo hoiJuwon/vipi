@@ -495,10 +495,27 @@ export default function sessionTree(pi: ExtensionAPI) {
     stopUnreadPoll();
   });
 
+  let desiredVimState: string | undefined;
+  let publishedVimState: string | undefined;
+  let publishingVimState = false;
   const publishVimState = (state: string) => {
     const pane = process.env.TMUX_PANE;
     if (!pane) return;
-    void run("tmux", ["set-option", "-p", "-t", pane, "@pi_vim_state", state]).catch(() => {});
+    desiredVimState = state;
+    if (publishingVimState || publishedVimState === state) return;
+    publishingVimState = true;
+    void (async () => {
+      try {
+        // Status-line events fire on every key/render. Publish only transitions,
+        // serially, so an older INSERT write cannot overtake a newer NORMAL.
+        while (currentSessionID && desiredVimState !== publishedVimState) {
+          const next = desiredVimState!;
+          const result = await run("tmux", ["set-option", "-p", "-t", pane, "@pi_vim_state", next]);
+          if (result.code !== 0) break;
+          publishedVimState = next;
+        }
+      } finally { publishingVimState = false; }
+    })();
   };
 
   pi.events.on("pi-vim:mode-change", (payload: unknown) => {

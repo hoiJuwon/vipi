@@ -155,6 +155,8 @@ def checkpoint(session=None):
     data = {'version': 1, 'savedAt': dt.datetime.now(dt.timezone.utc).isoformat(),
             'session': session, 'selected': selected, 'width': int(own['window_width']),
             'height': int(own['window_height']), 'sessions': records, 'warnings': warnings, 'pending': pending}
+    if {k: v for k, v in data.items() if k != 'savedAt'} == {k: v for k, v in old.items() if k != 'savedAt'}:
+        return old  # Conversations persist in Pi JSONL; unchanged layout needs no fsync.
     if old:
         atomic_json(STATE / 'workspace.previous.json', old)
     atomic_json(MANIFEST, data)

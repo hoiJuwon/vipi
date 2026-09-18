@@ -145,6 +145,10 @@ Slack OAuth에서 `User interaction is not allowed`가 나면 로컬 로그인 G
 - APNs `.p8`, pairing token, 기기 registry는 `~/.pi/agent/vipi/` 등에만 저장한다.
 - 사진/영상 보고는 dedicated HTTP 디렉터리 + 머신의 Tailscale 주소 + 검증된 직접 URL. 홈/프로젝트 전체를 serve하지 않는다.
 
+## 성능·트리 오류 점검
+
+[2026-09-18 성능 감사](docs/performance-audit.md)에 잔류 tree worker의 종료 루프, 과도한 동기 tmux 호출, idle 전체 재그리기의 수정과 실측·남은 위험을 기록했다. 트리 수명주기 회귀는 `python3 scripts/test-tree-lifecycle.py`로 검증한다. 실제 default tmux server나 정상 Pi/이미지 작업을 종료해서 테스트하지 않는다.
+
 ## 5. 유지보수와 롤백
 
 ```bash
