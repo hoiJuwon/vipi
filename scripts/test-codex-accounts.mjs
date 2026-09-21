@@ -49,6 +49,41 @@ try {
     });
     await output.result(); assert.equal(attempts.length, expected, 'only pre-output confirmed quota retries');
   }
+  const badRequest = { type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: '{"detail":"Bad Request"}' } };
+  for (const failures of [1, 2, 9]) {
+    const attempts = [], received = [];
+    const output = mod.routeStream(model, [0, 1], async account => {
+      attempts.push(account);
+      return { quota: () => false, status: () => 400, stream: eventsStream(attempts.length <= failures
+        ? [badRequest] : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
+    });
+    for await (const event of output) received.push(event);
+    assert.deepEqual(attempts, Array(Math.min(failures + 1, 3)).fill(0), 'retry twice, same account only');
+    assert.equal(received.length, 1, 'intermediate errors must not end the agent turn');
+    assert.equal(received[0].type, failures > 2 ? 'error' : 'done');
+    if (failures > 2) assert.match(received[0].error.errorMessage, /2회 즉시 재시도/);
+  }
+  for (const status of [401, 403, 429]) {
+    let calls = 0;
+    await mod.routeStream(model, [0, 1], async () => {
+      calls++; return { quota: () => false, status: () => status, stream: eventsStream([badRequest]) };
+    }).result();
+    assert.equal(calls, 1, 'known auth/access/rate-limit errors are not generic retries');
+  }
+  for (const firstEvent of ['start', 'text_delta', 'toolcall_start']) {
+    let calls = 0;
+    await mod.routeStream(model, [0, 1], async () => {
+      calls++; return { quota: () => false, stream: eventsStream([{ type: firstEvent, partial: msg('pending') }, badRequest]) };
+    }).result();
+    assert.equal(calls, 1, 'no retry after any emitted event');
+  }
+  for (const failure of [{ ...badRequest, reason: 'aborted' }, { ...badRequest, error: { ...badRequest.error, content: [{ type: 'text', text: 'partial' }] } }]) {
+    let calls = 0;
+    await mod.routeStream(model, [0, 1], async () => {
+      calls++; return { quota: () => false, stream: eventsStream([failure]) };
+    }).result();
+    assert.equal(calls, 1, 'aborted/partial responses must not retry');
+  }
   const controller = new AbortController(); controller.abort();
   const aborted = mod.routeStream(model, [0, 1], async () => { throw Error('must not call'); }, controller.signal);
   assert.equal((await aborted.result()).stopReason, 'aborted');
@@ -62,7 +97,7 @@ try {
   assert.equal(mod.accountEmail('invalid'), undefined);
   const credentials = Object.fromEntries(mod.ACCOUNT_IDS.map((id, index) => [id, { type: 'oauth', access: token('account-' + index), refresh: 'test-only', expires: now + 999999 }]));
   writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials), { mode: 0o600 });
-  let loginCredential = credentials['openai-codex'];
+  let loginCredential = credentials['openai-codex'], forcedBadRequests = 0;
   const calls = [], providers = new Map(), hooks = new Map(), commands = new Map(), serviceEvents = new Map(), published = [];
   const native = { id: 'openai-codex', name: 'Native', getModels: () => [model], refreshModels() {}, auth: { oauth: { login: async () => loginCredential } },
     stream(model, context, options) {
@@ -70,6 +105,11 @@ try {
       void (async () => {
         calls.push({ model, context, options });
         try {
+          if (forcedBadRequests > 0) {
+            forcedBadRequests--;
+            await options.onResponse({ status: 400, headers: {} }, model);
+            throw new Error('{"detail":"Bad Request"}');
+          }
           if (options.apiKey === credentials['openai-codex'].access) await options.onResponse({ status: 429, headers }, model);
           else await options.onResponse({ status: 200, headers: { ...headers, 'x-codex-primary-used-percent': '20' } }, model);
           stream.push({ type: 'done', reason: 'stop', message: msg('stop') });
@@ -124,6 +164,15 @@ try {
     await providers.get('openai-codex').stream(model, context, {}).result();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.apiKey, credentials['openai-codex-2'].access);
+    // Restored sessions may dispatch directly to the account-2 alias: it needs the same retry wrapper.
+    calls.length = 0; forcedBadRequests = 2;
+    const aliasResult = await providers.get('openai-codex-2').streamSimple({ ...model, provider: 'openai-codex-2' }, context, { sessionId: 'alias-fixture' }).result();
+    assert.equal(aliasResult.stopReason, 'stop'); assert.equal(calls.length, 3);
+    for (const call of calls) {
+      assert.strictEqual(call.context, context, 'retry must preserve completed tool results');
+      assert.equal(call.options.apiKey, credentials['openai-codex-2'].access);
+      assert.equal(call.options.sessionId, calls[0].options.sessionId);
+    }
     // An external preference change applies on the next request, while quota fallback remains intact.
     rmSync(join(home, 'codex-accounts/1.json'));
     writeFileSync(preferencePath, JSON.stringify({ account: 1, revision: 'external-switch' }));
@@ -172,5 +221,5 @@ try {
     await new Promise(resolve => setTimeout(resolve, 550));
     assert.equal(updates.length, count, 'idle must not leave an activity timer running');
   } finally { Date.now = originalNow; activityHooks.get('session_shutdown')({}, ctx); }
-  console.log('PASS: account routing/footer regressions; unchanged account/activity display does not redraw; idle timers stopped');
+  console.log('PASS: immediate same-account Bad Request retry, bounded exhaustion, no replay/auth/abort retries, alias routing, account/footer/activity regressions');
 } finally { rmSync(home, { recursive: true, force: true }); }
