@@ -5,7 +5,7 @@
   "tuiMode": "regular",
   "outputPad": 0,
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultModel": "gpt-6-sol",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "transport": "sse",

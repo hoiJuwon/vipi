@@ -16,7 +16,7 @@ Pi **0.84.2**의 native provider / OAuth / CredentialStore를 그대로 사용�
 - 계정 2는 브라우저에서 **다른 ChatGPT 계정**으로 승인한다. 같은 계정이면 저장 전에 거부한다.
 - OAuth의 브라우저 callback/paste-code 흐름은 Pi 기본 UI를 사용한다. 두 로그인 과정을 동시에 시작하지 않는다(기본 callback 포트 공유).
 - 계정 1 재인증: `/login openai-codex`. 계정 2 해제: `/logout`에서 `Codex 계정 2` 선택.
-- 모델은 계속 `openai-codex/gpt-6-astra`를 선택한다. 계정 2 provider는 로그인 슬롯이며 별도 모델 목록을 만들지 않는다.
+- 모델은 계속 `openai-codex/gpt-6-sol`를 선택한다. 계정 2 provider는 로그인 슬롯이며 별도 모델 목록을 만들지 않는다.
 
 아래 바 예시:
 

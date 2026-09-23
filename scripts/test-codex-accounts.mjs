@@ -196,10 +196,10 @@ try {
   assert.equal(rendered.length, 2);
   assert.match(rendered[0], /^NORMAL\s+roy@example.com \| Usage 46% Left$/);
   assert.match(rendered[1], /^gpt 6 astra High\s+account2 not connected$/);
-  await footerHooks.get('model_select')({ model: { id: 'gpt-5.6-sol' } });
-  assert.match(component.render(120)[1], /^gpt 5\.6 sol High\s/);
+  await footerHooks.get('model_select')({ model: { id: 'gpt-6-sol' } });
+  assert.match(component.render(120)[1], /^gpt 6 sol High\s/);
   await footerHooks.get('thinking_level_select')({ level: 'medium' });
-  assert.match(component.render(120)[1], /^gpt 5\.6 sol Medium\s/);
+  assert.match(component.render(120)[1], /^gpt 6 sol Medium\s/);
   const { visibleWidth } = await jiti.import('@earendil-works/pi-tui');
   for (const width of [0, 1, 12, 30, 60, 120]) for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
   const { vimStateFromFooter } = await jiti.import('../pi/packages/pi-session-tree/index.ts');

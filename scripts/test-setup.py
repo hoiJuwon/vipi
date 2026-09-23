@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-setup-test-') as directory:
         subprocess.run(['python3', str(root / 'scripts/setup.py'), '--apply'],
                        env=env, check=True, stdout=subprocess.DEVNULL)
     settings = json.loads((home / '.pi/agent/settings.json').read_text())
-    assert settings['defaultModel'] == 'gpt-6-astra'
+    assert settings['defaultModel'] == 'gpt-6-sol'
     assert len(settings['packages']) == len(set(settings['packages']))
     assert (home / '.pi/agent/packages/pi-vim-local').is_symlink()
     assert str(home) in (home / '.tmux.conf').read_text()

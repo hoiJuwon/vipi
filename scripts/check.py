@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 root = Path(__file__).resolve().parents[1]
 settings = json.loads((root / 'pi/settings.json').read_text())
-assert settings['defaultModel'] == 'gpt-6-astra'
+assert settings['defaultModel'] == 'gpt-6-sol'
 assert settings['defaultThinkingLevel'] == 'high'
 assert settings['tuiMode'] == 'regular'
 assert 'modeChange' not in settings['piVim']

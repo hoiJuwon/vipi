@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
                      f'const p={json.dumps(str(marker))}; let n=0;'
                      'try {n=Number(readFileSync(p,"utf8"));} catch {} writeFileSync(p,String(n+1)); }); }')
     m.atomic_json(m.AGENT / 'settings.json', {'packages': [str(p) for p in (root / 'pi/packages').iterdir()] + [str(probe)],
-                  'defaultProvider': 'openai-codex', 'defaultModel': 'gpt-6-astra', 'defaultThinkingLevel': 'medium'})
+                  'defaultProvider': 'openai-codex', 'defaultModel': 'gpt-6-sol', 'defaultThinkingLevel': 'medium'})
     file = home / 'fixture.jsonl'
     identity = str(uuid.uuid4())
     m.atomic_json(file, {'type': 'session', 'version': 3, 'id': identity,

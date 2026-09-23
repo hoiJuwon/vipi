@@ -10,7 +10,7 @@ macOS에서 쓰는 Pi 터미널 환경을 재현하는 저장소다. **코드·�
 
 - macOS, Homebrew, Git, Python 3, Node/npm, tmux, Neovim.
 - 검증 기준: Pi `0.84.2`, Node `23.10.0`. Node 다른 버전·Pi 최신 버전은 별도 회귀 검사가 필요하다.
-- Astra를 사용할 수 있는 OpenAI Codex 계정. ChatGPT 앱 접근 권한과 Pi provider 권한은 별도 확인한다.
+- GPT-6 Sol을 사용할 수 있는 OpenAI Codex 계정. ChatGPT 앱 접근 권한과 Pi provider 권한은 별도 확인한다.
 - 원격 접속 시 Tailscale/SSH. iOS 클라이언트 빌드 시 Xcode, signing 권한, private 서브모듈 접근 권한.
 
 ```bash
@@ -56,13 +56,13 @@ python3 scripts/setup.py --apply --ios-path "$HOME/vipi-ios"
 
 ### 로그인 및 적용 확인
 
-Pi 안에서 `/login` → `openai-codex`. `/model`에서 `gpt-6-astra` 선택 가능 여부를 확인한다. 기본값은 **Astra / high**이다. 계정에 모델이 없다면 모델 목록 갱신이나 provider 접근 확인이 먼저이며 ID를 추가한다고 권한이 생기지 않는다.
+Pi 안에서 `/login` → `openai-codex`. `/model`에서 `gpt-6-sol` 선택 가능 여부를 확인한다. 기본값은 **GPT-6 Sol / high**이다. 계정에 모델이 없다면 모델 목록 갱신이나 provider 접근 확인이 먼저이며 ID를 추가한다고 권한이 생기지 않는다.
 
 ```bash
 pi list
 pi --list-models astra
 # 선택 사항: 실제 모델 호출 (사용량 발생)
-pi --model openai-codex/gpt-6-astra --thinking high -p --no-session 'Reply only OK.'
+pi --model openai-codex/gpt-6-sol --thinking high -p --no-session 'Reply only OK.'
 ```
 
 열려 있던 Pi는 사용자가 유휴 상태에서 `/reload`한다. 새 세션은 새 설정을 읽는다. 기존 대화에 저장된 모델/모드는 새 기본값과 다를 수 있다.
@@ -82,7 +82,7 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 
 | 영역 | 설정 |
 |---|---|
-| 모델 | `openai-codex/gpt-6-astra`, thinking `high`, reasoning block 숨김, SSE |
+| 모델 | `openai-codex/gpt-6-sol`, thinking `high`, reasoning block 숨김, SSE |
 | TUI | `regular`, tmux scrollback 유지, Vim 테마 |
 | 입력 | 어두운 borderless 배경, 위아래 padding, 초록색 `  > `, INSERT에서만 cursor |
 | 모드 | 신규 tree `n` 세션은 INSERT, 정상 제출 후 NORMAL, 기존 세션 활성화는 NORMAL |

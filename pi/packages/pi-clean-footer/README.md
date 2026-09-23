@@ -4,7 +4,7 @@ Replaces Pi's built-in footer with two aligned rows:
 
 ```text
 NORMAL                            first@example.com | Usage 45% Left
-gpt 5.6 sol High                               account2 not connected
+gpt 6 sol High                               account2 not connected
 ```
 
 The left first row is owned by `pi-vim-local` and shows the active Vim mode, pending Normal command, or live EX command. The current model ID (hyphens replaced by spaces) and capitalized thinking level are directly below it, without a `Thinking:` label. Model selection updates the row immediately. The right side shows account 1 then account 2, each right-aligned on its own row. The active account is brighter; narrow terminals truncate the account text before hiding the left-side state. `Shift+Tab` changes the thinking level and updates the footer immediately. Workspace and session names are intentionally omitted.
