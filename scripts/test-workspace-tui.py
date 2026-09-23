@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
         assert ready, screen
         footer_lines = screen.rstrip().splitlines()[-2:]
         assert footer_lines[0].startswith('NORMAL') and 'account1 not connected' in footer_lines[0], screen
-        assert footer_lines[1].startswith('Thinking:') and 'account2 not connected' in footer_lines[1], screen
+        assert footer_lines[1].startswith(('gpt ', 'unknown Off', 'model unavailable Off')) and 'account2 not connected' in footer_lines[1], screen
         for reload_count in range(1, 3):
             m.tmux('send-keys', '-t', pi_pane['pane_id'], '-l', 'i/reload')
             m.tmux('send-keys', '-t', pi_pane['pane_id'], 'Enter')

@@ -22,10 +22,10 @@ Pi **0.84.2**의 native provider / OAuth / CredentialStore를 그대로 사용�
 
 ```text
 NORMAL                      first@example.com | Usage 45% Left
-Thinking: high             second@example.com | Usage 90% Left
+gpt 6 astra High           second@example.com | Usage 90% Left
 ```
 
-왼쪽은 Vim 상태와 그 아래 Thinking, 오른쪽 두 줄은 계정별 이메일과 **남은 사용량**이다. 현재 Pi 프로세스가 마지막으로 요청을 보낸 계정은 더 밝게 표시한다. 계정 2 로그인 전에는 `account2 not connected`로 표시한다. 이메일은 OAuth access token의 profile claim에서 읽으며 사용량 캐시에 저장하지 않는다. 이메일을 얻지 못하면 `account1` / `account2`로 표시한다. footer는 주간 잔여량을 우선 표시하고 주간 창이 없으면 가장 긴 창을 사용한다. `~`는 오래되었거나 조회에 실패한 마지막 값이고, reset 시각이 지났으면 `checking...`으로 표시한다. `/codex-accounts`는 새 조회를 시도하고 제공된 5시간·주간 창의 잔여량과 초기화 시각도 보여준다(명령 출력의 `*`가 현재 계정). 잔여량은 실시간 보장이 아니라 최근 서버 관측값이다.
+왼쪽은 Vim 상태와 그 아래 현재 모델·thinking 강도, 오른쪽 두 줄은 계정별 이메일과 **남은 사용량**이다. 현재 Pi 프로세스가 마지막으로 요청을 보낸 계정은 더 밝게 표시한다. 계정 2 로그인 전에는 `account2 not connected`로 표시한다. 이메일은 OAuth access token의 profile claim에서 읽으며 사용량 캐시에 저장하지 않는다. 이메일을 얻지 못하면 `account1` / `account2`로 표시한다. footer는 주간 잔여량을 우선 표시하고 주간 창이 없으면 가장 긴 창을 사용한다. `~`는 오래되었거나 조회에 실패한 마지막 값이고, reset 시각이 지났으면 `checking...`으로 표시한다. `/codex-accounts`는 새 조회를 시도하고 제공된 5시간·주간 창의 잔여량과 초기화 시각도 보여준다(명령 출력의 `*`가 현재 계정). 잔여량은 실시간 보장이 아니라 최근 서버 관측값이다.
 
 ## 우선 계정 변경
 

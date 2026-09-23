@@ -189,13 +189,17 @@ try {
   footer({ getThinkingLevel: () => 'high', setThinkingLevel: () => assert.fail('footer must not change thinking'),
     on: (e, fn) => footerHooks.set(e, fn), events: { on: (e, fn) => footerEvents.set(e, fn), emit: (e, data) => footerEvents.get(e)?.(data) } });
   footerEvents.get('vipi:codex-accounts')({ rows });
-  await footerHooks.get('session_start')({}, { mode: 'tui', ui: { setFooter: factory => { component = factory({ requestRender() { renders++; } }, { fg: (_color, text) => text }); } } });
+  await footerHooks.get('session_start')({}, { mode: 'tui', model: { id: 'gpt-6-astra' }, ui: { setFooter: factory => { component = factory({ requestRender() { renders++; } }, { fg: (_color, text) => text }); } } });
   footerEvents.get('vipi:codex-accounts')({ rows });
   assert.equal(renders, 0, 'unchanged account data must not schedule a redraw');
   const rendered = component.render(120);
   assert.equal(rendered.length, 2);
   assert.match(rendered[0], /^NORMAL\s+roy@example.com \| Usage 46% Left$/);
-  assert.match(rendered[1], /^Thinking: high\s+account2 not connected$/);
+  assert.match(rendered[1], /^gpt 6 astra High\s+account2 not connected$/);
+  await footerHooks.get('model_select')({ model: { id: 'gpt-5.6-sol' } });
+  assert.match(component.render(120)[1], /^gpt 5\.6 sol High\s/);
+  await footerHooks.get('thinking_level_select')({ level: 'medium' });
+  assert.match(component.render(120)[1], /^gpt 5\.6 sol Medium\s/);
   const { visibleWidth } = await jiti.import('@earendil-works/pi-tui');
   for (const width of [0, 1, 12, 30, 60, 120]) for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
   const { vimStateFromFooter } = await jiti.import('../pi/packages/pi-session-tree/index.ts');
@@ -204,6 +208,7 @@ try {
     assert.equal(vimStateFromFooter(component.render(120).join('\n')), expected);
   }
   assert.equal(vimStateFromFooter('NORMAL    Thinking: high  Weekly Usage Limit: 43% remaining'), 'normal');
+  assert.equal(vimStateFromFooter('NORMAL    first@example.com | Usage 50% Left\nThinking: high    account2 not connected'), 'normal');
   assert.equal(vimStateFromFooter('no footer'), undefined);
   const { default: activity } = await jiti.import('../pi/packages/pi-activity-line/index.ts');
   const activityHooks = new Map(), updates = [];

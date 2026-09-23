@@ -47,7 +47,7 @@ export function vimStateFromFooter(output: string): string | undefined {
   const lines = output.split("\n");
   let left: string | undefined;
   for (let index = lines.length - 1; index >= 0; index--) {
-    if (/^\s*Thinking:\s/u.test(lines[index]) && index > 0) {
+    if ((/^\s*Thinking:\s/u.test(lines[index]) || /^\S.* (?:Off|Minimal|Low|Medium|High|Xhigh|Max)(?:\s{2,}|$)/u.test(lines[index])) && index > 0) {
       left = lines[index - 1].trimStart().split(/\s{2,}/u, 1)[0].trim();
       break;
     }

@@ -594,7 +594,9 @@ local function normalize_target_vim_mode(entry, wait_for_startup)
     for index = #lines, 1, -1 do
       local line = lines[index]
       local left
-      if line:match("^%s*Thinking:%s") and index > 1 then
+      local model_level = (vim.split(line, "  ", { plain = true })[1] or ""):match(" (%a+)$")
+      local model_row = model_level and vim.tbl_contains({ "Off", "Minimal", "Low", "Medium", "High", "Xhigh", "Max" }, model_level)
+      if (line:match("^%s*Thinking:%s") or model_row) and index > 1 then
         left = vim.trim(vim.split(vim.trim(lines[index - 1]), "  ", { plain = true })[1] or "")
       elseif line:find("Weekly Usage Limit:", 1, true) then
         left = vim.trim(vim.split(line, "Thinking:", { plain = true })[1] or "")

@@ -67,6 +67,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
   let requestRender: (() => void) | undefined;
   let vimStatus: { text: string; mode: string } = { text: "", mode: "normal" };
   let thinkingLevel = "high";
+  let modelName = "model unavailable";
   let accountRows: { text: string; active: boolean }[] | undefined;
 
   pi.events.on("vipi:codex-accounts", (payload: unknown) => {
@@ -84,6 +85,12 @@ export default function cleanFooter(pi: ExtensionAPI) {
     if (typeof value.text !== "string" || typeof value.mode !== "string") return;
     if (vimStatus.text === value.text && vimStatus.mode === value.mode) return;
     vimStatus = { text: value.text, mode: value.mode };
+    requestRender?.();
+  });
+
+  pi.on("model_select", async (event) => {
+    modelName = event.model.id.replace(/-/g, " ");
+    thinkingLevel = pi.getThinkingLevel();
     requestRender?.();
   });
 
@@ -124,6 +131,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
       }
     }
     thinkingLevel = pi.getThinkingLevel();
+    modelName = ctx.model?.id.replace(/-/g, " ") ?? "model unavailable";
     ctx.ui.setFooter((tui, theme) => {
       requestRender = () => tui.requestRender();
       return {
@@ -141,7 +149,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
             : vimStatus.mode.startsWith("visual")
               ? "customMessageLabel"
               : "muted";
-          const leftRows = [theme.fg(vimColor, vimStatus.text.trim() || "NORMAL"), theme.fg("dim", `Thinking: ${thinkingLevel}`)];
+          const leftRows = [theme.fg(vimColor, vimStatus.text.trim() || "NORMAL"), theme.fg("dim", `${modelName} ${thinkingLevel[0].toUpperCase()}${thinkingLevel.slice(1)}`)];
           return leftRows.map((value, index) => {
             const left = truncateToWidth(value, width, "");
             const leftWidth = visibleWidth(left);
