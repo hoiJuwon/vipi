@@ -652,8 +652,10 @@ local function move_tree_and_focus(entry)
   local switch_args = { "switch-client" }
   if client ~= "" then vim.list_extend(switch_args, { "-c", client }) end
   vim.list_extend(switch_args, { "-t", target_window })
-  tmux(switch_args)
+  -- Hidden windows remember the tree pane as active after the last click. Select
+  -- the Pi pane before exposing the window, otherwise tmux paints tree → Pi.
   tmux({ "select-pane", "-t", entry.tmuxPaneId })
+  tmux(switch_args)
 end
 
 local function open_selected()

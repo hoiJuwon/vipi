@@ -584,8 +584,10 @@ export default function sessionTree(pi: ExtensionAPI) {
       if (mode && mode !== "normal") {
         await run("tmux", ["send-keys", "-t", target.tmuxPaneId, "Escape"]);
       }
-      await run("tmux", ["switch-client", "-t", `${target.tmuxSession}:${target.tmuxWindow}`]);
+      // The hidden target may still have its tree pane active from the last click.
+      // Select Pi before exposing the window to avoid a visible tree → Pi flash.
       await run("tmux", ["select-pane", "-t", target.tmuxPaneId]);
+      await run("tmux", ["switch-client", "-t", `${target.tmuxSession}:${target.tmuxWindow}`]);
     })();
   });
 

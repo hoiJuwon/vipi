@@ -63,10 +63,10 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         wait(lambda: tmux('display-message', '-p', '-t', owner, '#{session_attached}') == '1')
 
-        def launch():
+        def launch(target_owner=owner):
             server = home / ('rpc-' + uuid.uuid4().hex[:8])
             command = shlex.join([NVIM, '--listen', str(server), '--clean', '-n', '-u', str(ROOT / 'pi/packages/pi-session-tree/tree.lua')])
-            args = ['split-window', '-d', '-b', '-h', '-l', '45', '-t', owner, '-P', '-F', '#{pane_id}']
+            args = ['split-window', '-d', '-b', '-h', '-l', '45', '-t', target_owner, '-P', '-F', '#{pane_id}']
             env = {'PATH': str(bin_dir) + ':' + os.environ['PATH'], 'PI_SESSION_TREE_ROOT': str(home),
                    'PI_SESSION_TREE_REGISTRY': str(registry), 'PI_SESSION_TREE_CATALOG': str(catalog),
                    'PI_SESSION_TREE_WORKSPACES': str(workspaces)}
@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                 args += ['-e', k + '=' + v]
             pane = tmux(*args, 'exec env ' + shlex.quote('PATH=' + env['PATH']) + ' ' + command)
             tmux('set-option', '-p', '-t', pane, '@pi_session_tree', '1')
-            tmux('set-option', '-p', '-t', pane, '@pi_session_tree_owner', owner)
+            tmux('set-option', '-p', '-t', pane, '@pi_session_tree_owner', target_owner)
             def lua(code):
                 expr = 'luaeval(' + json.dumps(code) + ')'
                 return subprocess.check_output([NVIM, '--server', str(server), '--remote-expr', expr], text=True, timeout=5).strip()
@@ -108,6 +108,38 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         assert lua('vim.api.nvim_buf_get_changedtick(0)') == tick, 'timer interfered with rename prompt'
         tmux('send-keys', '-t', pane, 'Escape')
         time.sleep(0.3)
+
+        # A hidden target window usually remembers its tree pane as active after
+        # the prior visit. Activating the target Pi must happen before switching
+        # windows, or tmux visibly paints tree -> Pi on every session click.
+        target_owner = tmux('new-window', '-d', '-t', 'fixture:', '-P', '-F', '#{pane_id}', 'sleep 3600')
+        target_window = tmux('display-message', '-p', '-t', target_owner, '#{window_index}')
+        target_pid = int(tmux('display-message', '-p', '-t', target_owner, '#{pane_pid}'))
+        data['entries'].append({'piSessionId': 'target', 'name': '개발 / 대상', 'cwd': str(home),
+                                'tmuxPaneId': target_owner, 'pid': target_pid, 'tmuxSession': 'fixture',
+                                'tmuxWindow': target_window, 'status': 'idle', 'unread': False})
+        registry.write_text(json.dumps(data))
+        target_tree, target_worker, _target_parent, _target_lua = launch(target_owner)
+        tmux('select-pane', '-t', target_tree)  # reproduce remembered hidden tree focus
+        tmux('select-window', '-t', owner)
+        tmux('select-pane', '-t', pane)
+        wait(lambda: '대상' in lua('table.concat(vim.api.nvim_buf_get_lines(0,0,-1,false),"\\n")'))
+        target_line = int(lua('(function() for i,line in ipairs(vim.api.nvim_buf_get_lines(0,0,-1,false)) do if line:find("대상",1,true) then return i end end return 0 end)()'))
+        calls.write_text('')
+        lua(f'vim.api.nvim_win_set_cursor(0,{{{target_line},0}})')
+        tmux('send-keys', '-t', pane, 'Enter')
+        wait(lambda: tmux('display-message', '-p', '-t', target_owner, '#{pane_active}') == '1')
+        transition_calls = calls.read_text().splitlines()
+        select_at = next(i for i, line in enumerate(transition_calls) if f'select-pane -t {target_owner}' in line)
+        switch_at = next(i for i, line in enumerate(transition_calls) if 'switch-client' in line)
+        assert select_at < switch_at, transition_calls
+        tmux('select-window', '-t', owner)
+        tmux('select-pane', '-t', pane)
+        tmux('kill-pane', '-t', target_tree)
+        wait(lambda: not alive(target_worker))
+        data['entries'].pop()
+        registry.write_text(json.dumps(data))
+
         # Slow tmux must not block Neovim input or queue periodic work recursively.
         slow.touch()
         time.sleep(0.4)
@@ -149,7 +181,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                 tmux('kill-server')
             wait(lambda: not alive(pid))
         print(f'PASS: idle redraw=0, read-only registry, new unsaved row, permission PID, rename/input safety, '
-              f'visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
+              f'no target-tree flash, visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
     finally:
         tmux('kill-server', check=False)
         if client:

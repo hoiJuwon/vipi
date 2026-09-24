@@ -27,7 +27,7 @@ Live/new sessions are shown even before their first JSONL flush; deleting such a
 - `{count}gt`: open the numbered session (`1gt` opens session 1)
 - `gT` / `{count}gT`: previous session / move back by count
 - `Enter` or `l`: focus a live Pi, or immediately reopen a dormant session in a new tmux window
-- left mouse click on a numbered session row: move the tree cursor and run the same open/reopen path as `Enter`; workspace headings and empty rows remain non-opening
+- left mouse click on a numbered session row: move the tree cursor and run the same open/reopen path as `Enter`; workspace headings and empty rows remain non-opening. The hidden target's Pi pane is selected before its window is exposed, avoiding the remembered tree-pane flash.
 - `/`: native Neovim search
 - `n`: choose/create a folder, register it as a workspace, immediately insert a provisional `이름 생성 중` row, and start Pi there; startup atomically replaces that row with the real session ID/file
 - `a`: register an existing folder as an empty workspace without starting Pi
