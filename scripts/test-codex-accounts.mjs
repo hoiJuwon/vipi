@@ -39,7 +39,7 @@ try {
     stream.end();
     return stream;
   }
-  for (const [quota, emitted, expected] of [[true, false, 2], [false, false, 1], [true, true, 1]]) {
+  for (const [quota, emitted, expected] of [[true, false, 2], [false, false, 3], [true, true, 1]]) {
     const attempts = [];
     const output = mod.routeStream(model, [0, 1], async account => {
       attempts.push(account);
@@ -47,35 +47,47 @@ try {
         ? [...(emitted ? [{ type: 'toolcall_start', contentIndex: 0, partial: msg('pending') }] : []), { type: 'error', reason: 'error', error: msg('error') }]
         : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
     });
-    await output.result(); assert.equal(attempts.length, expected, 'only pre-output confirmed quota retries');
+    await output.result(); assert.equal(attempts.length, expected, 'quota switches accounts; other pre-output failures retry in place');
   }
-  const badRequest = { type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: '{"detail":"Bad Request"}' } };
-  const daybreak = { type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: '{"detail":"Unable to verify Daybreak Blue access. Please try again."}' } };
-  for (const transient of [badRequest, daybreak]) for (const failures of [1, 2, 9]) {
+  const errors = [
+    '{"detail":"Bad Request"}',
+    '{"detail":"Unable to verify Daybreak Blue access. Please try again."}',
+    'Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.',
+    '{"detail":"Daybreak Blue access denied."}',
+    'HTTP 401 authentication failed',
+    'HTTP 403 access denied',
+    'HTTP 429 temporary rate limit',
+  ].map(errorMessage => ({ type: 'error', reason: 'error', error: { ...msg('error'), errorMessage } }));
+  const badRequest = errors[0];
+  for (const failure of errors) for (const failures of [1, 2, 9]) {
     const attempts = [], received = [];
     const output = mod.routeStream(model, [0, 1], async account => {
       attempts.push(account);
-      return { quota: () => false, status: () => 400, stream: eventsStream(attempts.length <= failures
-        ? [transient] : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
+      return { quota: () => false, stream: eventsStream(attempts.length <= failures
+        ? [failure] : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
     });
     for await (const event of output) received.push(event);
-    assert.deepEqual(attempts, Array(Math.min(failures + 1, 3)).fill(0), 'retry twice, same account only');
+    assert.deepEqual(attempts, Array(Math.min(failures + 1, 3)).fill(0), 'retry every non-quota error twice on the same account');
     assert.equal(received.length, 1, 'intermediate errors must not end the agent turn');
     assert.equal(received[0].type, failures > 2 ? 'error' : 'done');
     if (failures > 2) assert.match(received[0].error.errorMessage, /2회 즉시 재시도/);
   }
-  let deniedCalls = 0;
-  await mod.routeStream(model, [0, 1], async () => {
-    deniedCalls++; return { quota: () => false, status: () => 400, stream: eventsStream([{ ...daybreak,
-      error: { ...daybreak.error, errorMessage: '{"detail":"Daybreak Blue access denied."}' } }]) };
+  let thrownCalls = 0;
+  const thrown = await mod.routeStream(model, [0, 1], async () => {
+    thrownCalls++; throw new Error('socket failed before stream');
   }).result();
-  assert.equal(deniedCalls, 1, 'only the exact explicitly retryable access-verification message retries');
-  for (const status of [401, 403, 429]) {
+  assert.equal(thrownCalls, 3, 'pre-stream failures retry twice');
+  assert.match(thrown.errorMessage, /2회 즉시 재시도/);
+  for (const makeStream of [
+    () => eventsStream([]),
+    () => ({ async *[Symbol.asyncIterator]() { throw new Error('stream transport failed'); } }),
+  ]) {
     let calls = 0;
-    await mod.routeStream(model, [0, 1], async () => {
-      calls++; return { quota: () => false, status: () => status, stream: eventsStream([badRequest]) };
+    const failed = await mod.routeStream(model, [0, 1], async () => {
+      calls++; return { quota: () => false, stream: makeStream() };
     }).result();
-    assert.equal(calls, 1, 'known auth/access/rate-limit errors are not generic retries');
+    assert.equal(calls, 3, 'pre-output stream failures retry twice');
+    assert.match(failed.errorMessage, /2회 즉시 재시도/);
   }
   for (const firstEvent of ['start', 'text_delta', 'toolcall_start']) {
     let calls = 0;
@@ -233,5 +245,5 @@ try {
     await new Promise(resolve => setTimeout(resolve, 550));
     assert.equal(updates.length, count, 'idle must not leave an activity timer running');
   } finally { Date.now = originalNow; activityHooks.get('session_shutdown')({}, ctx); }
-  console.log('PASS: immediate same-account Bad Request/Daybreak verification retry, bounded exhaustion, no replay/auth/abort retries, alias routing, account/footer/activity regressions');
+  console.log('PASS: every pre-output non-quota error retries on the same account, bounded exhaustion, no replay/abort retries, alias routing, account/footer/activity regressions');
 } finally { rmSync(home, { recursive: true, force: true }); }

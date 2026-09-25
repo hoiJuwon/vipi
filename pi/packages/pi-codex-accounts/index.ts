@@ -101,25 +101,16 @@ export function formatAccounts(accounts: Account[], now = Date.now()): string {
   }).join(" · ");
 }
 
-// Retry explicitly transient provider failures twice on the SAME account,
-// immediately. Quota failover is separate. Neither path may replay after ANY
-// start/content event. Tool execution is outside this wrapper and is never replayed.
-const RETRYABLE_DETAILS = new Set([
-  "Bad Request",
-  "Unable to verify Daybreak Blue access. Please try again.",
-]);
+// Retry every non-quota provider failure twice on the SAME account, immediately.
+// Quota failover is separate. Neither path may replay after ANY start/content
+// event. Tool execution is outside this wrapper and is never replayed.
 const PRE_OUTPUT_RETRIES = 2;
-function retryablePreOutputError(message: string | undefined): boolean {
-  if (!message) return false;
-  try {
-    const parsed = JSON.parse(message);
-    return parsed && typeof parsed === "object" && RETRYABLE_DETAILS.has(parsed.detail);
-  } catch { return false; }
-}
+const retryFailure = (message: string) =>
+  `${message}\n동일 모델 요청을 ${PRE_OUTPUT_RETRIES}회 즉시 재시도했지만 실패했습니다.`;
 export function routeStream(
   model: any,
   candidates: number[],
-  attempt: (account: number) => Promise<{ stream: AssistantMessageEventStream; quota: () => boolean; status?: () => number | undefined }>,
+  attempt: (account: number) => Promise<{ stream: AssistantMessageEventStream; quota: () => boolean }>,
   signal?: AbortSignal,
 ): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
@@ -129,43 +120,63 @@ export function routeStream(
       let preOutputRetries = 0;
       for (let index = 0; index < candidates.length;) {
         if (signal?.aborted) throw new Error("Request was aborted");
-        const request = await attempt(candidates[index]);
+        let request: Awaited<ReturnType<typeof attempt>>;
+        try {
+          request = await attempt(candidates[index]);
+        } catch (error) {
+          if (!signal?.aborted && preOutputRetries < PRE_OUTPUT_RETRIES) {
+            preOutputRetries++;
+            continue;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(preOutputRetries === PRE_OUTPUT_RETRIES ? retryFailure(message) : message);
+        }
         let emitted = false;
         let terminal = false;
-        for await (const event of request.stream) {
-          if (event.type === "error" && event.reason !== "aborted" && !signal?.aborted && !emitted
-              && request.quota() && index + 1 < candidates.length) {
-            index++;
-            terminal = true;
-            break;
-          }
-          if (event.type === "error" && event.reason !== "aborted" && !signal?.aborted && !emitted
-              && event.error.content.length === 0 && !request.quota()
-              && ![401, 403, 429].includes(request.status?.() ?? 0)
-              && retryablePreOutputError(event.error.errorMessage) && preOutputRetries < PRE_OUTPUT_RETRIES) {
-            preOutputRetries++;
-            terminal = true; // unchanged index: retry only this model request, on the same account
-            break;
-          }
-          if (event.type === "error" || event.type === "done") {
-            if (event.type === "error" && event.reason !== "aborted" && !emitted && request.quota()) {
-              output.push({ ...event, error: { ...event.error,
-                errorMessage: "연결된 Codex 계정 사용량이 소진됐습니다. /codex-accounts에서 초기화 시각 또는 두 번째 계정 연결을 확인하세요." } });
+        try {
+          for await (const event of request.stream) {
+            if (event.type === "error" && event.reason !== "aborted" && !signal?.aborted && !emitted
+                && request.quota() && index + 1 < candidates.length) {
+              index++;
+              preOutputRetries = 0;
+              terminal = true;
+              break;
+            }
+            if (event.type === "error" && event.reason !== "aborted" && !signal?.aborted && !emitted
+                && event.error.content.length === 0 && !request.quota()
+                && preOutputRetries < PRE_OUTPUT_RETRIES) {
+              preOutputRetries++;
+              terminal = true; // unchanged index: retry only this model request, on the same account
+              break;
+            }
+            if (event.type === "error" || event.type === "done") {
+              if (event.type === "error" && event.reason !== "aborted" && !emitted && request.quota()) {
+                output.push({ ...event, error: { ...event.error,
+                  errorMessage: "연결된 Codex 계정 사용량이 소진됐습니다. /codex-accounts에서 초기화 시각 또는 두 번째 계정 연결을 확인하세요." } });
+                output.end();
+                return;
+              }
+              if (event.type === "error" && event.reason !== "aborted" && !emitted
+                  && event.error.content.length === 0 && !request.quota()
+                  && preOutputRetries === PRE_OUTPUT_RETRIES) {
+                output.push({ ...event, error: { ...event.error,
+                  errorMessage: retryFailure(event.error.errorMessage ?? "Codex request failed") } });
+              } else output.push(event);
               output.end();
               return;
             }
-            if (event.type === "error" && preOutputRetries === PRE_OUTPUT_RETRIES
-                && retryablePreOutputError(event.error.errorMessage)) {
-              output.push({ ...event, error: { ...event.error,
-                errorMessage: `${event.error.errorMessage}\n동일 모델 요청을 ${PRE_OUTPUT_RETRIES}회 즉시 재시도했지만 실패했습니다.` } });
-            } else output.push(event);
-            output.end();
-            return;
+            emitted = true;
+            output.push(event);
           }
-          emitted = true;
-          output.push(event);
+          if (!terminal) throw new Error("Codex stream ended without a terminal event");
+        } catch (error) {
+          if (!signal?.aborted && !emitted && preOutputRetries < PRE_OUTPUT_RETRIES) {
+            preOutputRetries++;
+            continue;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(!emitted && preOutputRetries === PRE_OUTPUT_RETRIES ? retryFailure(message) : message);
         }
-        if (!terminal) throw new Error("Codex stream ended without a terminal event");
       }
     } catch (error) {
       const message: AssistantMessage = {
@@ -301,13 +312,11 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
       if (preference.revision === requestRevision) active = index;
       publish();
       let quota = false;
-      let status: number | undefined;
       const who = fingerprint(accountId(auth.auth.apiKey));
       const selectedModel = { ...model, provider: ACCOUNT_IDS[index] };
       const accountOptions = { ...options, ...auth.auth, transport: "sse",
         sessionId: options.sessionId ? `${options.sessionId}:codex-${index + 1}` : undefined,
         async onResponse(response: any, responseModel: any) {
-          status = response.status;
           const usage = usageFromHeaders(response.headers);
           if (usage && generalQuota) {
             try { saveUsage(index, usage, who); } catch { /* Quota cache is not required to stream a response. */ }
@@ -320,7 +329,7 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
           }
         },
       };
-      return { stream: simple ? base!.streamSimple(selectedModel, context, accountOptions) : base!.stream(selectedModel, context, accountOptions), quota: () => quota, status: () => status };
+      return { stream: simple ? base!.streamSimple(selectedModel, context, accountOptions) : base!.stream(selectedModel, context, accountOptions), quota: () => quota };
     }, options.signal);
   }
   pi.registerProvider({ ...base, name: "Codex 계정 1 / 자동 전환", auth: { ...base.auth, oauth: oauthFor(0) },
