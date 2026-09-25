@@ -101,11 +101,21 @@ export function formatAccounts(accounts: Account[], now = Date.now()): string {
   }).join(" · ");
 }
 
-// Retry ambiguous Bad Request failures twice on the SAME account, immediately.
-// Quota failover is separate. Neither path may replay after ANY start/content event.
-// Tool execution is outside this wrapper and is never replayed.
-const BAD_REQUEST = /^\s*\{\s*"detail"\s*:\s*"Bad Request"\s*\}\s*$/u;
-const BAD_REQUEST_RETRIES = 2;
+// Retry explicitly transient provider failures twice on the SAME account,
+// immediately. Quota failover is separate. Neither path may replay after ANY
+// start/content event. Tool execution is outside this wrapper and is never replayed.
+const RETRYABLE_DETAILS = new Set([
+  "Bad Request",
+  "Unable to verify Daybreak Blue access. Please try again.",
+]);
+const PRE_OUTPUT_RETRIES = 2;
+function retryablePreOutputError(message: string | undefined): boolean {
+  if (!message) return false;
+  try {
+    const parsed = JSON.parse(message);
+    return parsed && typeof parsed === "object" && RETRYABLE_DETAILS.has(parsed.detail);
+  } catch { return false; }
+}
 export function routeStream(
   model: any,
   candidates: number[],
@@ -116,7 +126,7 @@ export function routeStream(
   void (async () => {
     try {
       if (!candidates.length) throw new Error("Codex 계정 사용량이 모두 소진됐습니다. /codex-accounts에서 초기화 시각을 확인하세요.");
-      let badRequestRetries = 0;
+      let preOutputRetries = 0;
       for (let index = 0; index < candidates.length;) {
         if (signal?.aborted) throw new Error("Request was aborted");
         const request = await attempt(candidates[index]);
@@ -132,8 +142,8 @@ export function routeStream(
           if (event.type === "error" && event.reason !== "aborted" && !signal?.aborted && !emitted
               && event.error.content.length === 0 && !request.quota()
               && ![401, 403, 429].includes(request.status?.() ?? 0)
-              && BAD_REQUEST.test(event.error.errorMessage ?? "") && badRequestRetries < BAD_REQUEST_RETRIES) {
-            badRequestRetries++;
+              && retryablePreOutputError(event.error.errorMessage) && preOutputRetries < PRE_OUTPUT_RETRIES) {
+            preOutputRetries++;
             terminal = true; // unchanged index: retry only this model request, on the same account
             break;
           }
@@ -144,9 +154,10 @@ export function routeStream(
               output.end();
               return;
             }
-            if (event.type === "error" && badRequestRetries === BAD_REQUEST_RETRIES && BAD_REQUEST.test(event.error.errorMessage ?? "")) {
+            if (event.type === "error" && preOutputRetries === PRE_OUTPUT_RETRIES
+                && retryablePreOutputError(event.error.errorMessage)) {
               output.push({ ...event, error: { ...event.error,
-                errorMessage: `${event.error.errorMessage}\n동일 모델 요청을 ${BAD_REQUEST_RETRIES}회 즉시 재시도했지만 실패했습니다.` } });
+                errorMessage: `${event.error.errorMessage}\n동일 모델 요청을 ${PRE_OUTPUT_RETRIES}회 즉시 재시도했지만 실패했습니다.` } });
             } else output.push(event);
             output.end();
             return;

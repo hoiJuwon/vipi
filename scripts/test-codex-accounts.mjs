@@ -50,12 +50,13 @@ try {
     await output.result(); assert.equal(attempts.length, expected, 'only pre-output confirmed quota retries');
   }
   const badRequest = { type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: '{"detail":"Bad Request"}' } };
-  for (const failures of [1, 2, 9]) {
+  const daybreak = { type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: '{"detail":"Unable to verify Daybreak Blue access. Please try again."}' } };
+  for (const transient of [badRequest, daybreak]) for (const failures of [1, 2, 9]) {
     const attempts = [], received = [];
     const output = mod.routeStream(model, [0, 1], async account => {
       attempts.push(account);
       return { quota: () => false, status: () => 400, stream: eventsStream(attempts.length <= failures
-        ? [badRequest] : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
+        ? [transient] : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
     });
     for await (const event of output) received.push(event);
     assert.deepEqual(attempts, Array(Math.min(failures + 1, 3)).fill(0), 'retry twice, same account only');
@@ -63,6 +64,12 @@ try {
     assert.equal(received[0].type, failures > 2 ? 'error' : 'done');
     if (failures > 2) assert.match(received[0].error.errorMessage, /2회 즉시 재시도/);
   }
+  let deniedCalls = 0;
+  await mod.routeStream(model, [0, 1], async () => {
+    deniedCalls++; return { quota: () => false, status: () => 400, stream: eventsStream([{ ...daybreak,
+      error: { ...daybreak.error, errorMessage: '{"detail":"Daybreak Blue access denied."}' } }]) };
+  }).result();
+  assert.equal(deniedCalls, 1, 'only the exact explicitly retryable access-verification message retries');
   for (const status of [401, 403, 429]) {
     let calls = 0;
     await mod.routeStream(model, [0, 1], async () => {
@@ -226,5 +233,5 @@ try {
     await new Promise(resolve => setTimeout(resolve, 550));
     assert.equal(updates.length, count, 'idle must not leave an activity timer running');
   } finally { Date.now = originalNow; activityHooks.get('session_shutdown')({}, ctx); }
-  console.log('PASS: immediate same-account Bad Request retry, bounded exhaustion, no replay/auth/abort retries, alias routing, account/footer/activity regressions');
+  console.log('PASS: immediate same-account Bad Request/Daybreak verification retry, bounded exhaustion, no replay/auth/abort retries, alias routing, account/footer/activity regressions');
 } finally { rmSync(home, { recursive: true, force: true }); }
