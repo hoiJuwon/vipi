@@ -35,6 +35,7 @@ python3 scripts/setup.py                 # dry run: 대상 경로만 출력
 python3 scripts/setup.py --apply         # 기존 파일을 백업하고 설정 적용
 pi                                      # npm/git 패키지 자동 설치; 완료되면 종료
 sh scripts/patch-mcp.sh                  # MCP 권한 대기 상태 패치 적용
+sh scripts/patch-imagegen.sh             # 이미지 도구의 Codex 우선 계정 선택 적용
 # tmux server가 실행 중일 때만:
 tmux source-file ~/.tmux.conf
 ```
@@ -102,7 +103,7 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 
 ### Codex 세 계정
 
-기존 계정 1·2는 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-3`로 **다른 계정**을 연결한다. `/codex-accounts`는 세 계정의 잔여량과 초기화 시각을 보여준다. 아래 바 오른쪽 세 줄은 각 계정의 `email | Usage 43% Left` 형식이다. 미연결 슬롯은 `account3 not connected`로 표시하고 현재 사용 계정은 더 밝게 표시한다.
+기존 계정 1·2는 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-3`로 **다른 계정**을 연결한다. `/codex-accounts`는 세 계정의 잔여량과 초기화 시각을 보여준다. 아래 바 오른쪽 세 줄은 각 계정의 `email | Usage 43% Left` 형식이다. 미연결 슬롯은 `account3 not connected`로 표시하고 현재 사용 계정은 더 밝게 표시한다. 패치된 `codex_generate_image`도 **도구 호출 시작 시점의 우선 계정**을 사용한다. 이미지 생성 도중 계정을 변경해도 진행 중인 요청은 바뀌지 않는다.
 
 사용량 소진이 확인된 경우에만 자동 전환하며, 이미 출력한 응답·실행한 도구는 재실행하지 않는다. 계정별 OAuth는 Pi의 기본 file lock으로 갱신한다. [계정 연결·자동 전환·검증 범위·해제](pi/packages/pi-codex-accounts/README.md)를 읽는다.
 
@@ -133,7 +134,9 @@ Slack OAuth에서 `User interaction is not allowed`가 나면 로컬 로그인 G
 
 `pi-mcp-adapter@2.27.0` 원본 대비 [patch](patches/pi-mcp-adapter-2.27.0.patch)를 저장했다. 실제 approval/elicitation lifecycle에서 pane option `@pi_permission_waiting=mcp:<PID>`를 켜고 finally/lifecycle에서 해제한다. 화면 문자열을 검색해서 권한 상태를 추측하지 않는다.
 
-패치 스크립트는 버전 불일치를 거부하고 이미 적용된 패치에는 아무것도 하지 않는다. npm 재설치 후 다시 실행한다. adapter 업데이트 시 새 원본과 diff를 재검토해야 한다. `pi update --all`을 무조건 실행하지 않는다.
+패치 스크립트는 버전 불일치를 거부하고 이미 적용된 패치에는 아무것도 하지 않는다. npm 재설치 후 다시 실행한다. adapter 업데이트 시 새 원본과 diff를 재검토해야 한다.
+
+`pi-codex-image-gen@0.1.12`에도 [계정 선택 패치](patches/pi-codex-image-gen-0.1.12.patch)를 적용한다. `sh scripts/patch-imagegen.sh`는 일반 설치본과 복원된 Pi의 임시 npm 설치본을 함께 확인한다. 이미지 도구는 `/codex-accounts use 1|2|3`으로 저장한 우선 계정을 매 호출마다 읽고 해당 OAuth를 사용한다. 미연결 계정·손상된 우선 계정 파일이면 실패하며 1번으로 몰래 전송하지 않는다. 실제 이미지 요청 없이 `node scripts/test-imagegen-account.mjs`로 토큰·계정 헤더를 검증한다. `pi update --all`을 무조건 실행하지 않는다.
 
 ## 4. iOS / 원격 사용
 
@@ -159,11 +162,12 @@ python3 scripts/setup.py                  # 변경 대상 확인
 # 템플릿 변경을 적용할 때:
 python3 scripts/setup.py --apply
 sh scripts/patch-mcp.sh
+sh scripts/patch-imagegen.sh
 ```
 
 템플릿 재적용 시 기존 iOS 경로를 유지하려면 다시 `--ios-path`를 지정한다. linked extension 수정은 파일에 즉시 반영되지만 실행 중 Pi에는 `/reload`가 필요하다. repo를 이동하면 symlink가 깨지므로 새 위치에서 setup을 다시 실행한다.
 
-롤백: 해당 timestamp 백업의 파일/폴더를 원래 경로로 복원한다. symlink는 링크 자체만 제거하고 원본 repo를 삭제하지 않는다. MCP 패치 롤백은 adapter 디렉터리에서 `git apply --reverse <repo>/patches/pi-mcp-adapter-2.27.0.patch`. iOS 서브모듈 버전 변경은 해당 repo에서 테스트·커밋·push한 후 부모 repo에서 포인터를 커밋한다.
+롤백: 해당 timestamp 백업의 파일/폴더를 원래 경로로 복원한다. symlink는 링크 자체만 제거하고 원본 repo를 삭제하지 않는다. MCP 패치 롤백은 adapter 디렉터리에서 `git apply --reverse <repo>/patches/pi-mcp-adapter-2.27.0.patch`. 이미지 패치는 해당 npm 설치본에서 `git apply --reverse <repo>/patches/pi-codex-image-gen-0.1.12.patch`. iOS 서브모듈 버전 변경은 해당 repo에서 테스트·커밋·push한 후 부모 repo에서 포인터를 커밋한다.
 
 ## 6. 포함하지 않는 것 / 검증 범위
 

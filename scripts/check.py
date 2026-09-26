@@ -22,6 +22,8 @@ for p in (root / 'pi/packages').rglob('*.sh'):
 assert '45' in (root / 'pi/packages/pi-session-tree/fix-sidebar-width.sh').read_text()
 assert '@HOME@' in (root / 'config/tmux.conf').read_text()
 assert (root / 'patches/pi-mcp-adapter-2.27.0.patch').stat().st_size > 0
+assert (root / 'patches/pi-codex-image-gen-0.1.12.patch').stat().st_size > 0
+subprocess.run(['sh', '-n', str(root / 'scripts/patch-imagegen.sh')], check=True)
 for folder in ['pi', 'config', 'scripts', 'patches']:
     for p in (root / folder).rglob('*'):
         if p.is_file() and '__pycache__' not in p.parts:

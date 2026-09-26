@@ -1,0 +1,85 @@
+diff --git a/extensions/index.ts b/extensions/index.ts
+--- a/extensions/index.ts
++++ b/extensions/index.ts
+@@ -18,6 +18,21 @@ import { reportInstallTelemetry } from "../src/install-telemetry.js";
+ const PACKAGE_NAME = "pi-codex-image-gen";
+ const PROVIDER = "openai-codex";
+ const DEFAULT_MODEL = "gpt-5.5";
++
++// Match /codex-accounts use 1|2|3 at each tool call, not at extension startup.
++export function selectedCodexProvider(agentDir = getAgentDir()): string {
++	let preference: { account?: unknown };
++	try {
++		preference = JSON.parse(readFileSync(join(agentDir, "codex-accounts", "preference.json"), "utf8"));
++	} catch (error) {
++		if ((error as NodeJS.ErrnoException).code === "ENOENT") return PROVIDER;
++		throw new Error("Codex account preference cannot be read. Run /codex-accounts use 1|2|3 again.");
++	}
++	if (preference?.account !== 1 && preference?.account !== 2 && preference?.account !== 3) {
++		throw new Error("Invalid Codex account preference. Run /codex-accounts use 1|2|3 again.");
++	}
++	return preference.account === 1 ? PROVIDER : `${PROVIDER}-${preference.account}`;
++}
+ const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
+ const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+ const DEFAULT_SAVE_MODE = "global";
+@@ -558,7 +573,7 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 		name: "codex_generate_image",
+ 		label: "Codex Image",
+ 		description:
+-			"Generate or edit an image with the OpenAI Codex ChatGPT backend built-in image_generation tool (gpt-image-2). Accepts up to five local or recent conversation images. Uses the existing openai-codex login; does not require OPENAI_API_KEY.",
++			"Generate or edit an image with the OpenAI Codex ChatGPT backend built-in image_generation tool (gpt-image-2). Accepts up to five local or recent conversation images. Uses the preferred Codex login from /codex-accounts; does not require OPENAI_API_KEY.",
+ 		promptSnippet: "Generate or edit bitmap images via the OpenAI Codex ChatGPT backend gpt-image-2 image_generation tool.",
+ 		promptGuidelines: [
+ 			"Use codex_generate_image when the user asks to generate or edit a raster image with OpenAI/Codex image generation.",
+@@ -572,9 +587,10 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 			const config = loadConfig(ctx.cwd, projectTrusted); // #5: load once, pass to resolveSaveConfig
+ 			const requestedModel = params.model || config.model || DEFAULT_MODEL;
+ 			const model = ctx.modelRegistry.find(PROVIDER, requestedModel)?.id || requestedModel; // #6: removed dead FALLBACK_MODEL
+-			const token = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
++			const provider = selectedCodexProvider();
++			const token = await ctx.modelRegistry.getApiKeyForProvider(provider);
+ 			if (!token) {
+-				throw new Error(`Missing ${PROVIDER} credentials. Run /login and select ChatGPT Plus/Pro (Codex).`);
++				throw new Error(`Missing ${provider} credentials. Run /login ${provider} first.`);
+ 			}
+ 			const accountId = extractChatGptAccountId(token);
+ 			const sessionId = ctx.sessionManager.getSessionId();
+@@ -586,8 +602,8 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 			const inputImages = await resolveInputImages(params, ctx.cwd, messages);
+ 
+ 			onUpdate?.({
+-				content: [{ type: "text", text: `Requesting gpt-image-2 ${inputImages.length > 0 ? "edit" : "generation"} through ${PROVIDER}/${model}...` }],
+-				details: { provider: PROVIDER, model, outputFormat, inputImageCount: inputImages.length },
++				content: [{ type: "text", text: `Requesting gpt-image-2 ${inputImages.length > 0 ? "edit" : "generation"} through ${provider}/${model}...` }],
++				details: { provider, model, outputFormat, inputImageCount: inputImages.length },
+ 			});
+ 
+ 			const parsed = await requestImage(params, token, accountId, model, outputFormat, sessionId, inputImages, signal);
+@@ -607,7 +623,7 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 					savedPath = await saveImage(imageBytes, outputFormat, saveConfig.outputDir, parsed.image.id || toolCallId);
+ 					onUpdate?.({
+ 						content: [{ type: "text", text: `Image saved to ${savedPath}.` }],
+-						details: { provider: PROVIDER, model, savedPath, byteCount: imageBytes.length },
++						details: { provider, model, savedPath, byteCount: imageBytes.length },
+ 					});
+ 				} catch (error) {
+ 					saveWarning = `Image generation succeeded, but the image could not be saved to disk: ${error instanceof Error ? error.message : String(error)}`;
+@@ -615,7 +631,7 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 			}
+ 
+ 			const summary = [
+-				`Generated image via ${PROVIDER}/${model} using backend gpt-image-2.`,
++				`Generated image via ${provider}/${model} using backend gpt-image-2.`,
+ 				`Status: ${parsed.image.status}.`,
+ 				parsed.image.revisedPrompt ? `Revised prompt: ${parsed.image.revisedPrompt}` : undefined,
+ 				savedPath ? `Saved image to: ${savedPath}` : "Image was not saved to disk.",
+@@ -630,7 +646,7 @@ export default function codexImageGen(pi: ExtensionAPI) {
+ 					{ type: "image", data: parsed.image.result, mimeType: mimeForFormat(outputFormat) },
+ 				],
+ 				details: {
+-					provider: PROVIDER,
++					provider,
+ 					model,
+ 					backendImageModel: "gpt-image-2",
+ 					outputFormat,
