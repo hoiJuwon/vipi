@@ -4,6 +4,10 @@ Never uses the user's default socket, registry or Pi sessions. No model calls.
 """
 import json
 import os
+import pty
+import fcntl
+import struct
+import termios
 from pathlib import Path
 import shlex
 import shutil
@@ -51,6 +55,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
     workspaces.write_text(json.dumps({'workspaces': [str(home)]}))
     workers = []
     client = None
+    mouse_clients = []
     try:
         tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', '-x', '140', '-y', '40', 'sleep 3600')
         owner = tmux('display-message', '-p', '-t', 'fixture', '#{pane_id}')
@@ -128,13 +133,43 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         calls.write_text('')
         lua(f'vim.api.nvim_win_set_cursor(0,{{{target_line},0}})')
         tmux('send-keys', '-t', pane, 'Enter')
-        wait(lambda: tmux('display-message', '-p', '-t', target_owner, '#{pane_active}') == '1')
+        wait(lambda: any('switch-client' in line for line in calls.read_text().splitlines()))
+        assert tmux('display-message', '-p', '-t', target_owner, '#{pane_active}') == '1'
         transition_calls = calls.read_text().splitlines()
         select_at = next(i for i, line in enumerate(transition_calls) if f'select-pane -t {target_owner}' in line)
         switch_at = next(i for i, line in enumerate(transition_calls) if 'switch-client' in line)
         assert select_at < switch_at, transition_calls
         tmux('select-window', '-t', owner)
         tmux('select-pane', '-t', pane)
+        # tmux's display-message -t pane picks an arbitrary attached client.
+        # Real mouse input must carry the originating tty through the binding.
+        mouse_binding = home / 'mouse.conf'
+        mouse_binding.write_text(next(line for line in (ROOT / 'config/tmux.conf').read_text().splitlines()
+                                      if line.startswith('bind-key -T root MouseDown1Pane ')) + '\n')
+        tmux('source-file', mouse_binding)
+        tmux('set-option', '-g', 'mouse', 'on')
+        for _ in range(2):
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 140, 0, 0))
+            process = subprocess.Popen([TMUX, '-L', SOCKET, 'attach-session', '-t', 'fixture'],
+                                       stdin=slave, stdout=slave, stderr=slave,
+                                       env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
+            mouse_clients.append((process, master, slave, os.ttyname(slave)))
+            time.sleep(0.2)
+        wait(lambda: all(tty in tmux('list-clients', '-F', '#{client_tty}').splitlines()
+                         for _, _, _, tty in mouse_clients))
+        assert tmux('display-message', '-p', '-t', pane, '#{client_tty}') != mouse_clients[0][3], 'fixture must reproduce wrong-client inference'
+        calls.write_text('')
+        os.write(mouse_clients[0][1], f'\x1b[<0;3;{target_line}M'.encode())
+        wait(lambda: any('switch-client -c ' + mouse_clients[0][3] in line
+                         for line in calls.read_text().splitlines()), timeout=5)
+        assert tmux('show-options', '-p', '-v', '-t', pane, '@pi_session_tree_click_client') == mouse_clients[0][3]
+        tmux('select-window', '-t', owner)
+        tmux('select-pane', '-t', pane)
+        for process, master, slave, _ in mouse_clients:
+            process.terminate(); process.wait(timeout=5)
+            os.close(master); os.close(slave)
+        mouse_clients.clear()
         tmux('kill-pane', '-t', target_tree)
         wait(lambda: not alive(target_worker))
         data['entries'].pop()
@@ -181,12 +216,15 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                 tmux('kill-server')
             wait(lambda: not alive(pid))
         print(f'PASS: idle redraw=0, read-only registry, new unsaved row, permission PID, rename/input safety, '
-              f'no target-tree flash, visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
+              f'target Pi selected before exposure, mouse origin preserved across clients, visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
     finally:
         tmux('kill-server', check=False)
         if client:
             client.terminate()
             client.wait(timeout=5)
+        for process, master, slave, _ in mouse_clients:
+            process.terminate(); process.wait(timeout=5)
+            os.close(master); os.close(slave)
         for pid in workers:
             if alive(pid):
                 os.kill(pid, signal.SIGKILL)

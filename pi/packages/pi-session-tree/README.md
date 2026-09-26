@@ -27,7 +27,7 @@ Live/new sessions are shown even before their first JSONL flush; deleting such a
 - `{count}gt`: open the numbered session (`1gt` opens session 1)
 - `gT` / `{count}gT`: previous session / move back by count
 - `Enter` or `l`: focus a live Pi, or immediately reopen a dormant session in a new tmux window
-- left mouse click on a numbered session row: move the tree cursor and run the same open/reopen path as `Enter`; workspace headings and empty rows remain non-opening. The hidden target's Pi pane is selected before its window is exposed, avoiding the remembered tree-pane flash.
+- left mouse click on a numbered session row: move the tree cursor and run the same open/reopen path as `Enter`; workspace headings and empty rows remain non-opening. The hidden target's Pi pane is selected before its window is exposed. The tmux mouse binding stamps the clicking client's TTY before forwarding the event; pane-targeted `display-message` cannot identify the origin when multiple clients are attached.
 - `/`: native Neovim search
 - `n`: choose/create a folder, register it as a workspace, immediately insert a provisional `이름 생성 중` row, and start Pi there; startup atomically replaces that row with the real session ID/file
 - `a`: register an existing folder as an empty workspace without starting Pi
@@ -72,7 +72,7 @@ Periodic refresh is read-only and uses one asynchronous tmux snapshot, at most e
 
 Cleanup is registered before startup IO. UI detach, buffer wipe, exiting/dying state and normal leave stop the timer, cancel the snapshot process, and reject queued work. A worker whose original TUI parent disappears exits directly (scratch tree only). Background errors do not open hit-enter prompts; inspect `vim.g.pi_tree_last_error` if the tree statusline reports a refresh error.
 
-Run `python3 scripts/test-tree-lifecycle.py` from the repo root for real Neovim/tmux tests, including render-error + pane removal and parent SIGKILL. [Audit, measurements, residual risks](../../../docs/performance-audit.md).
+Run `python3 scripts/test-tree-lifecycle.py` from the repo root for real Neovim/tmux tests, including two-client mouse origin, render-error + pane removal and parent SIGKILL. If two terminals attach to the **same tmux session**, tmux shares its current window and pane layout across both: either client switching windows also switches the other, and differing terminal sizes force a redraw. Use separate grouped sessions if independent current windows are required; that is separate from click-origin routing. [Audit, measurements, residual risks](../../../docs/performance-audit.md).
 
 ## Storage and access
 

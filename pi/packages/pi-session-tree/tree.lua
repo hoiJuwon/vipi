@@ -624,7 +624,7 @@ local function normalize_target_vim_mode(entry, wait_for_startup)
   end
 end
 
-local function move_tree_and_focus(entry)
+local function move_tree_and_focus(entry, clicked_client)
   local launched = not entry.live
   local wait_for_startup = launched or entry.waitForStartup == true
   if launched then
@@ -647,8 +647,15 @@ local function move_tree_and_focus(entry)
   local target_window = target_coordinates(entry)
   if not ensure_tree_for(entry) then return end
 
-  local _, client = tmux({ "display-message", "-p", "-t", tree_pane, "#{client_tty}" })
-  client = vim.trim(client)
+  local client = clicked_client
+  if client then
+    local _, attached = tmux({ "list-clients", "-F", "#{client_tty}\t#{pane_id}" })
+    if not attached:find(client .. "\t" .. tree_pane, 1, true) then return end
+  else
+    -- Keyboard navigation has no tmux origin marker; keep its old behavior.
+    local _, inferred = tmux({ "display-message", "-p", "-t", tree_pane, "#{client_tty}" })
+    client = vim.trim(inferred)
+  end
   local switch_args = { "switch-client" }
   if client ~= "" then vim.list_extend(switch_args, { "-c", client }) end
   vim.list_extend(switch_args, { "-t", target_window })
@@ -658,9 +665,9 @@ local function move_tree_and_focus(entry)
   tmux(switch_args)
 end
 
-local function open_selected()
+local function open_selected(clicked_client)
   local entry = entry_under_cursor()
-  if entry then move_tree_and_focus(entry) end
+  if entry then move_tree_and_focus(entry, clicked_client) end
 end
 
 local function choose_workspace(prompt, default)
@@ -907,8 +914,9 @@ map("l", open_selected)
 map("<LeftMouse>", function()
   local mouse = vim.fn.getmousepos()
   if mouse.winid ~= vim.api.nvim_get_current_win() or mouse.line < 1 then return end
+  local _, origin = tmux({ "show-options", "-p", "-v", "-t", tree_pane, "@pi_session_tree_click_client" })
   vim.api.nvim_win_set_cursor(0, { mouse.line, 0 })
-  open_selected()
+  open_selected(vim.trim(origin) ~= "" and vim.trim(origin) or nil)
 end)
 map("gt", function() session_tab(1) end)
 map("gT", function() session_tab(-1) end)
