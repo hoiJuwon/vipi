@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { installCodexAccounts } from "../pi-codex-accounts/index";
+import { ACCOUNT_IDS, installCodexAccounts } from "../pi-codex-accounts/index";
 
 const USAGE_PATH = resolve(homedir(), ".pi", "agent", "codex-weekly-usage.json");
 const WEEK_MINUTES = 7 * 24 * 60;
@@ -73,7 +73,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
   pi.events.on("vipi:codex-accounts", (payload: unknown) => {
     if (typeof payload !== "object" || payload === null) return;
     const rows = (payload as { rows?: unknown }).rows;
-    if (!Array.isArray(rows) || rows.length !== 2 || !rows.every(row => row && typeof row.text === "string" && typeof row.active === "boolean")) return;
+    if (!Array.isArray(rows) || rows.length !== ACCOUNT_IDS.length || !rows.every(row => row && typeof row.text === "string" && typeof row.active === "boolean")) return;
     if (JSON.stringify(accountRows) === JSON.stringify(rows)) return;
     accountRows = rows;
     requestRender?.();
@@ -126,7 +126,7 @@ export default function cleanFooter(pi: ExtensionAPI) {
         const start = await installCodexAccounts(pi);
         start();
       } catch {
-        accountRows = [1, 2].map(number => ({ text: `account${number} status unavailable`, active: false }));
+        accountRows = ACCOUNT_IDS.map((_id, index) => ({ text: `account${index + 1} status unavailable`, active: false }));
         ctx.ui.notify("Codex 계정 확장을 불러오지 못했습니다. 새 Pi에서 다시 확인하세요.", "warning");
       }
     }
@@ -150,10 +150,9 @@ export default function cleanFooter(pi: ExtensionAPI) {
               ? "customMessageLabel"
               : "muted";
           const leftRows = [theme.fg(vimColor, vimStatus.text.trim() || "NORMAL"), theme.fg("dim", `${modelName} ${thinkingLevel[0].toUpperCase()}${thinkingLevel.slice(1)}`)];
-          return leftRows.map((value, index) => {
-            const left = truncateToWidth(value, width, "");
+          return rows.map((row, index) => {
+            const left = truncateToWidth(leftRows[index] ?? "", width, "");
             const leftWidth = visibleWidth(left);
-            const row = rows[index];
             const right = truncateToWidth(theme.fg(row.active ? "muted" : "dim", row.text), Math.max(0, width - leftWidth - 2), "…");
             return `${left}${" ".repeat(Math.max(0, width - leftWidth - visibleWidth(right)))}${right}`;
           });

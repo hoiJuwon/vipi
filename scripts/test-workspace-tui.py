@@ -55,24 +55,26 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
             screen = m.tmux('capture-pane', '-p', '-t', pi_pane['pane_id']).stdout
             registered = any(e.get('piSessionId') == identity for e in m.registry())
             tree_ready = m.tmux('show-options', '-p', '-v', '-t', tree['pane_id'], '@pi_session_tree_ready', check=False).stdout.strip()
-            if 'NORMAL' in screen and 'account2 not connected' in screen and registered and tree_ready == '1':
+            if 'NORMAL' in screen and 'account3 not connected' in screen and registered and tree_ready == '1':
                 ready = True
                 break
             time.sleep(0.5)
         assert ready, screen
-        footer_lines = screen.rstrip().splitlines()[-2:]
+        footer_lines = screen.rstrip().splitlines()[-3:]
         assert footer_lines[0].startswith('NORMAL') and 'account1 not connected' in footer_lines[0], screen
         assert footer_lines[1].startswith(('gpt ', 'unknown Off', 'model unavailable Off')) and 'account2 not connected' in footer_lines[1], screen
+        assert 'account3 not connected' in footer_lines[2], screen
         for reload_count in range(1, 3):
             m.tmux('send-keys', '-t', pi_pane['pane_id'], '-l', 'i/reload')
             m.tmux('send-keys', '-t', pi_pane['pane_id'], 'Enter')
             deadline = time.time() + 30
             while time.time() < deadline:
                 screen = m.tmux('capture-pane', '-p', '-t', pi_pane['pane_id'], '-S', '-2000').stdout
-                footer_lines = screen.rstrip().splitlines()[-2:]
+                footer_lines = screen.rstrip().splitlines()[-3:]
                 if (marker.exists() and int(marker.read_text()) >= reload_count + 1
                         and 'account1 not connected' in footer_lines[0]
-                        and 'account2 not connected' in footer_lines[1]):
+                        and 'account2 not connected' in footer_lines[1]
+                        and 'account3 not connected' in footer_lines[2]):
                     break
                 time.sleep(0.5)
             else:
@@ -81,6 +83,6 @@ with tempfile.TemporaryDirectory(prefix='vipi-tui-test-') as directory:
         assert width == '45', width
         m.checkpoint()
         assert len(m.read_json(m.MANIFEST, {})['sessions']) == 1
-        print('PASS: actual Pi resume, two account rows after two reloads, NORMAL, registry, 45-column tree, checkpoint (no model call)' + ('; legacy CLI whitelist' if '--legacy-cli' in sys.argv else ''))
+        print('PASS: actual Pi resume, three account rows after two reloads, NORMAL, registry, 45-column tree, checkpoint (no model call)' + ('; legacy CLI whitelist' if '--legacy-cli' in sys.argv else ''))
     finally:
         m.tmux('kill-server', check=False)

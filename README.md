@@ -89,7 +89,7 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 | 리뷰 | NORMAL의 `R`만 tmux snapshot REVIEW; Esc는 live NORMAL |
 | 탐색 | `:e .` 세션 tree, `gt/gT` 이동, `zt/zb/zz` 최신 응답 탐색 |
 | 트리 | **45칸 고정**, 분류별 정렬·생성순, `r` 수동 이름/분류, working/unread/권한 대기 |
-| footer | Vim 상태 + thinking + Codex 두 계정 잔여량/현재 계정 |
+| footer | Vim 상태 + thinking + Codex 세 계정 잔여량/현재 계정 |
 | 응답 | Korean Direct, URL/경로 강조, 사용자 메시지 정렬, Markdown heading 표시 보정 |
 | 활동 | 경량 activity line, tool 및 경과 시간 표시 |
 | Ponytail | `v4.9.0`, full 기본, 시작 알림·상태 표시 숨김 |
@@ -100,9 +100,9 @@ vipi install-autostart             # macOS 로그인 시 자동 복원 등록
 
 > 전역 설정에는 기존 `defaultProjectTrust: "always"`가 포함된다. 신뢰하지 않는 repo의 프로젝트 확장 실행이 위험하므로 다른 사용자는 이 정책을 검토하고 자신의 Pi trust 설정으로 변경해야 한다.
 
-### Codex 두 계정
+### Codex 세 계정
 
-기존 계정 1은 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-2`로 **다른 계정**을 연결한다. `/codex-accounts`는 두 계정의 잔여량과 초기화 시각을 보여준다. 아래 바 왼쪽은 Vim 상태와 그 아래 Thinking, 오른쪽 두 줄은 각 계정의 `email | Usage 43% Left` 형식이다. 미연결 슬롯은 `account2 not connected`로 표시하고 현재 사용 계정은 더 밝게 표시한다.
+기존 계정 1·2는 유지한다. 새 Pi 또는 유휴 상태에서 `/reload` 후 `/login openai-codex-3`로 **다른 계정**을 연결한다. `/codex-accounts`는 세 계정의 잔여량과 초기화 시각을 보여준다. 아래 바 오른쪽 세 줄은 각 계정의 `email | Usage 43% Left` 형식이다. 미연결 슬롯은 `account3 not connected`로 표시하고 현재 사용 계정은 더 밝게 표시한다.
 
 사용량 소진이 확인된 경우에만 자동 전환하며, 이미 출력한 응답·실행한 도구는 재실행하지 않는다. 계정별 OAuth는 Pi의 기본 file lock으로 갱신한다. [계정 연결·자동 전환·검증 범위·해제](pi/packages/pi-codex-accounts/README.md)를 읽는다.
 

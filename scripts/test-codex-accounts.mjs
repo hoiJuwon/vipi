@@ -25,10 +25,10 @@ try {
   assert.equal(mod.usageFromHeaders({ 'x-codex-primary-used-percent': 'oops' }), undefined);
   assert.throws(() => mod.usageFromBody({}), /응답 형식/);
   const usage = mod.usageFromBody({ rate_limit: { allowed: true, limit_reached: false, primary_window: { used_percent: 54, limit_window_seconds: 604800, reset_at: now / 1000 + 86400 } } });
-  assert.equal(mod.formatAccounts([{ number: 1, active: true, connected: true, usage }, { number: 2, active: false, connected: false }]), '1* 주46% · 2 미연결');
+  assert.equal(mod.formatAccounts([{ number: 1, active: true, connected: true, usage }, { number: 2, active: false, connected: false }, { number: 3, active: false, connected: false }]), '1* 주46% · 2 미연결 · 3 미연결');
   assert.match(mod.formatAccounts([{ number: 1, active: true, connected: true, usage }], now + 180000), /~46%/);
-  const rows = mod.accountRows([{ number: 1, active: true, connected: true, email: 'roy@example.com', usage }, { number: 2, active: false, connected: false }]);
-  assert.deepEqual(rows, [{ text: 'roy@example.com | Usage 46% Left', active: true }, { text: 'account2 not connected', active: false }]);
+  const rows = mod.accountRows([{ number: 1, active: true, connected: true, email: 'roy@example.com', usage }, { number: 2, active: false, connected: false }, { number: 3, active: false, connected: false }]);
+  assert.deepEqual(rows, [{ text: 'roy@example.com | Usage 46% Left', active: true }, { text: 'account2 not connected', active: false }, { text: 'account3 not connected', active: false }]);
   assert.match(mod.accountRows([{ number: 2, active: false, connected: true, email: 'second@example.com', usage }])[0].text, /^second@example.com \| Usage 46% Left$/);
   assert.match(mod.accountRows([{ number: 1, active: true, connected: true, usage }], now + 180000)[0].text, /~46% Left/);
   const model = { provider: 'openai-codex', api: 'openai-codex-responses', id: 'gpt-6-astra' };
@@ -49,6 +49,14 @@ try {
     });
     await output.result(); assert.equal(attempts.length, expected, 'quota switches accounts; other pre-output failures retry in place');
   }
+  const quotaAttempts = [];
+  await mod.routeStream(model, [0, 1, 2], async account => {
+    quotaAttempts.push(account);
+    return { quota: () => account < 2, stream: eventsStream(account < 2
+      ? [{ type: 'error', reason: 'error', error: msg('error') }]
+      : [{ type: 'done', reason: 'stop', message: msg('stop') }]) };
+  }).result();
+  assert.deepEqual(quotaAttempts, [0, 1, 2], 'confirmed quota exhausts all three accounts in order');
   const errors = [
     '{"detail":"Bad Request"}',
     '{"detail":"Unable to verify Daybreak Blue access. Please try again."}',
@@ -146,11 +154,16 @@ try {
   try {
     await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand: (name, command) => commands.set(name, command), on: (e, f) => hooks.set(e, f), events: { on: (e, fn) => serviceEvents.set(e, fn), emit: (...v) => published.push(v) } });
     assert.ok(providers.has('openai-codex-2'));
-    assert.equal(providers.get('openai-codex-2').refreshModels, undefined, 'login alias must not reset the primary model catalog');
+    assert.ok(providers.has('openai-codex-3'));
+    for (const id of ['openai-codex-2', 'openai-codex-3'])
+      assert.equal(providers.get(id).refreshModels, undefined, 'login aliases must not reset the primary model catalog');
     assert.deepEqual(providers.get('openai-codex').getModels(), [model]);
     await assert.rejects(() => providers.get('openai-codex-2').auth.oauth.login({}), /같은 Codex 계정/);
+    await assert.rejects(() => providers.get('openai-codex-3').auth.oauth.login({}), /같은 Codex 계정/);
     loginCredential = credentials['openai-codex-2'];
     await providers.get('openai-codex-2').auth.oauth.login({});
+    loginCredential = credentials['openai-codex-3'];
+    await providers.get('openai-codex-3').auth.oauth.login({});
     const context = { messages: [], tools: [] };
     const result = await providers.get('openai-codex').stream(model, context, { sessionId: 'fixture', reasoningEffort: 'high' }).result();
     assert.equal(result.stopReason, 'stop'); assert.equal(calls.length, 2);
@@ -169,27 +182,29 @@ try {
     await commands.get('codex-accounts').handler('use 2', { ui });
     assert.equal(JSON.parse(readFileSync(preferencePath)).account, 2);
     assert.equal(statSync(preferencePath).mode & 0o777, 0o600);
-    const selected = readFileSync(preferencePath, 'utf8');
     await commands.get('codex-accounts').handler('use 3', { ui });
+    assert.equal(JSON.parse(readFileSync(preferencePath)).account, 3);
+    const selected = readFileSync(preferencePath, 'utf8');
+    await commands.get('codex-accounts').handler('use 4', { ui });
     assert.equal(readFileSync(preferencePath, 'utf8'), selected);
     writeFileSync(join(home, 'auth.json'), JSON.stringify({ 'openai-codex': credentials['openai-codex'] }));
-    await commands.get('codex-accounts').handler('use 2', { ui });
+    await commands.get('codex-accounts').handler('use 3', { ui });
     assert.match(notices.at(-1), /먼저 로그인/);
     assert.equal(readFileSync(preferencePath, 'utf8'), selected);
     writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials));
-    // A separate extension instance must start with the persisted account 2.
+    // A separate extension instance must start with the persisted account 3.
     await mod.default({ registerProvider: p => providers.set(p.id, p), registerCommand() {}, on() {}, events: { emit() {}, on() {} } });
     calls.length = 0;
     await providers.get('openai-codex').stream(model, context, {}).result();
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].options.apiKey, credentials['openai-codex-2'].access);
-    // Restored sessions may dispatch directly to the account-2 alias: it needs the same retry wrapper.
+    assert.equal(calls[0].options.apiKey, credentials['openai-codex-3'].access);
+    // Restored sessions may dispatch directly to the account-3 alias: it needs the same retry wrapper.
     calls.length = 0; forcedBadRequests = 2;
-    const aliasResult = await providers.get('openai-codex-2').streamSimple({ ...model, provider: 'openai-codex-2' }, context, { sessionId: 'alias-fixture' }).result();
+    const aliasResult = await providers.get('openai-codex-3').streamSimple({ ...model, provider: 'openai-codex-3' }, context, { sessionId: 'alias-fixture' }).result();
     assert.equal(aliasResult.stopReason, 'stop'); assert.equal(calls.length, 3);
     for (const call of calls) {
       assert.strictEqual(call.context, context, 'retry must preserve completed tool results');
-      assert.equal(call.options.apiKey, credentials['openai-codex-2'].access);
+      assert.equal(call.options.apiKey, credentials['openai-codex-3'].access);
       assert.equal(call.options.sessionId, calls[0].options.sessionId);
     }
     // An external preference change applies on the next request, while quota fallback remains intact.
@@ -212,9 +227,10 @@ try {
   footerEvents.get('vipi:codex-accounts')({ rows });
   assert.equal(renders, 0, 'unchanged account data must not schedule a redraw');
   const rendered = component.render(120);
-  assert.equal(rendered.length, 2);
+  assert.equal(rendered.length, 3);
   assert.match(rendered[0], /^NORMAL\s+roy@example.com \| Usage 46% Left$/);
   assert.match(rendered[1], /^gpt 6 astra High\s+account2 not connected$/);
+  assert.match(rendered[2], /^\s+account3 not connected$/);
   await footerHooks.get('model_select')({ model: { id: 'gpt-6-sol' } });
   assert.match(component.render(120)[1], /^gpt 6 sol High\s/);
   await footerHooks.get('thinking_level_select')({ level: 'medium' });
