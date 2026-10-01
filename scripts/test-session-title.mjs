@@ -28,7 +28,7 @@ try {
   extension(pi);
   const first = '컴퓨터 용량 문제 한번 체크해줘. 안쓰는거 있는지 전체적으로 검수해줘. 지울만한 것들 리스트업해줘.';
   const ctx = { hasUI: true, ui: { notify: (...args) => notices.push(args) },
-    sessionManager: { getSessionId: () => sessionId, getBranch: () => [{ type: 'message', message: { role: 'user', content: first } }] },
+    sessionManager: { getSessionId: () => sessionId, getSessionFile: () => undefined, getBranch: () => [{ type: 'message', message: { role: 'user', content: first } }] },
     modelRegistry: { find: (provider, id) => { assert.equal(id, 'gpt-6-astra'); return { provider, id }; },
       hasConfiguredAuth: () => true, complete: async (_model, context, options) => {
         assert.equal(options.reasoningEffort, 'low'); assert.equal(options.transport, 'sse');
@@ -77,8 +77,17 @@ try {
   writes = readFileSync(log, 'utf8').split('\n').filter(line => line.includes('@pi_vim_state'));
   assert.equal(writes.length, 3);
   assert.ok(writes.at(-1).endsWith(' normal'), 'state writes must remain ordered');
+  const active = join(home, 'active'); writeFileSync(active, '0');
+  writeFileSync(join(bin, 'tmux'), `#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);\nif(args[0]==='list-clients'&&fs.readFileSync(${JSON.stringify(active)},'utf8')==='1')process.stdout.write('%fixture\\n');\nif(args[0]==='display-message'&&args.includes(${JSON.stringify('#S\t#I\t#{pane_id}')}))process.stdout.write('test\\t1\\t%fixture\\n');\nif(args[0]==='display-message'&&args.includes('#{session_group}'))process.stdout.write('test\\n');\n`, { mode: 0o700 });
+  await hooks.get('agent_settled')({}, ctx);
+  assert.equal(JSON.parse(readFileSync(registry)).entries[0].unread, true, 'hidden completion is unread');
+  const read = JSON.parse(readFileSync(registry)); read.entries[0].unread = false;
+  writeFileSync(registry, JSON.stringify(read)); // Tree acknowledged the message while Pi registration was pending.
+  writeFileSync(active, '1');
+  await hooks.get('session_info_changed')({ name: '개발 / 직접 지정' }, ctx);
+  assert.equal(JSON.parse(readFileSync(registry)).entries[0].unread, false, 'late Pi registration must not resurrect unread');
   hooks.get('session_shutdown')();
-  console.log('PASS: naming regressions; 100 identical Vim status events => one tmux write; ordered final NORMAL');
+  console.log('PASS: naming, Vim events, and stale unread registration after tree read');
 } finally {
   process.env.HOME = originalHome;
   process.env.PATH = originalPath;

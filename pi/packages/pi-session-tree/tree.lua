@@ -628,7 +628,6 @@ local function move_tree_and_focus(entry, clicked_client)
     entry = launch_session(entry)
     if not entry then return end
   end
-  mark_read(entry)
   -- A brand-new Pi starts in INSERT. Preserve that initial editor state instead
   -- of sending Escape during the tree's startup handshake. Existing live or
   -- reopened sessions still normalize to NORMAL when explicitly activated.
@@ -637,7 +636,7 @@ local function move_tree_and_focus(entry, clicked_client)
   end
   local owner = owner_pane()
   if entry.tmuxPaneId == owner then
-    tmux({ "select-pane", "-t", entry.tmuxPaneId })
+    if tmux({ "select-pane", "-t", entry.tmuxPaneId }) == 0 then mark_read(entry) end
     return
   end
 
@@ -696,6 +695,7 @@ local function move_tree_and_focus(entry, clicked_client)
     -- The old client stays on the source window. Restore its Pi focus.
     if owner ~= "" then tmux({ "select-pane", "-t", owner }) end
   end
+  if code == 0 then mark_read(entry) end
 end
 
 local function open_selected(clicked_client)

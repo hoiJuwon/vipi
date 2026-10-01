@@ -42,10 +42,16 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
     bin_dir.mkdir()
     calls = home / 'calls'
     slow = home / 'slow'
+    read_at_switch = home / 'read-at-switch'
+    fail_switch = home / 'fail-switch'
     wrapper = bin_dir / 'tmux'
     wrapper.write_text('#!' + shutil.which('python3') + '\nimport os,sys,time\n'
                        f'with open({str(calls)!r},"a") as f:f.write(str(time.monotonic())+" "+" ".join(sys.argv[1:])+"\\n")\n'
                        f'if os.path.exists({str(slow)!r}) and sys.argv[1:2]==["list-panes"]:time.sleep(2)\n'
+                       f'if sys.argv[1:2]==["switch-client"]:\n'
+                       f' import json\n'
+                       f' with open({str(read_at_switch)!r},"w") as f:f.write(str(json.load(open({str(home / "registry.json")!r}))["entries"][-1].get("unread")))\n'
+                       f' if os.path.exists({str(fail_switch)!r}):sys.exit(1)\n'
                        f'os.execv({TMUX!r},[{TMUX!r}]+sys.argv[1:])\n')
     wrapper.chmod(0o700)
     registry = home / 'registry.json'
@@ -122,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         target_pid = int(tmux('display-message', '-p', '-t', target_owner, '#{pane_pid}'))
         data['entries'].append({'piSessionId': 'target', 'name': '개발 / 대상', 'cwd': str(home),
                                 'tmuxPaneId': target_owner, 'pid': target_pid, 'tmuxSession': 'fixture',
-                                'tmuxWindow': target_window, 'status': 'idle', 'unread': False})
+                                'tmuxWindow': target_window, 'status': 'idle', 'unread': True})
         registry.write_text(json.dumps(data))
         target_tree, target_worker, _target_parent, _target_lua = launch(target_owner)
         tmux('select-pane', '-t', target_tree)  # reproduce remembered hidden tree focus
@@ -132,8 +138,16 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         target_line = int(lua('(function() for i,line in ipairs(vim.api.nvim_buf_get_lines(0,0,-1,false)) do if line:find("대상",1,true) then return i end end return 0 end)()'))
         calls.write_text('')
         lua(f'vim.api.nvim_win_set_cursor(0,{{{target_line},0}})')
+        fail_switch.touch()
         tmux('send-keys', '-t', pane, 'Enter')
         wait(lambda: any('switch-client' in line for line in calls.read_text().splitlines()))
+        assert json.loads(registry.read_text())['entries'][-1]['unread'] is True, 'failed switch must keep unread'
+        fail_switch.unlink()
+        calls.write_text('')
+        tmux('send-keys', '-t', pane, 'Enter')
+        wait(lambda: any('switch-client' in line for line in calls.read_text().splitlines()))
+        wait(lambda: json.loads(registry.read_text())['entries'][-1]['unread'] is False)
+        assert read_at_switch.read_text() == 'True', 'read must be acknowledged after the window switches'
         assert tmux('display-message', '-p', '-t', target_owner, '#{pane_active}') == '1'
         transition_calls = calls.read_text().splitlines()
         select_at = next(i for i, line in enumerate(transition_calls) if f'select-pane -t {target_owner}' in line)

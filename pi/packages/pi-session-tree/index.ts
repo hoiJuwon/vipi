@@ -275,6 +275,13 @@ export default function sessionTree(pi: ExtensionAPI) {
         ?? entries.find((entry) =>
           entry.piSessionId.startsWith("pending:") && entry.tmuxPaneId === coordinates.tmuxPaneId
         );
+      // A background completion may finish registering after the tree has
+      // switched to this Pi. Do not publish its stale unread=true again.
+      if (unread && await ownPaneIsActive()) {
+        unread = false;
+        lastUnread = false;
+        stopUnreadPoll();
+      }
       // Automatic naming locks the first inferred topic, but an explicit manual
       // `분류 / 내용` rename may replace it. A summary-only `/name` keeps the
       // existing topic for backward compatibility.

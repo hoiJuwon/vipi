@@ -59,12 +59,12 @@ The initially inferred topic remains fixed during automatic naming and status re
 
 - bold red `●`: the MCP adapter has entered a real tool-approval or elicitation lifecycle and is awaiting user interaction; it publishes a pane-local `@pi_permission_waiting=mcp:<publisher-pid>` marker before opening the UI and clears it in `finally` after accept/decline/cancel/error. Input, agent, tool, session-start, and session-shutdown boundaries also force-clear orphaned markers, and the tree accepts a marker only while its publisher process is alive. The tree never scans rendered text, so messages containing button labels cannot trigger this state. All pane options are read in one cached `list-panes` snapshot rather than one tmux process per live session, preventing session-count-dependent input stalls. This takes priority over the spinner.
 - bold yellow original Braille spinner (`⠋ ⠙ ⠹ …`): Pi is generating/running tools
-- bold green `●`: completed while not being viewed; unread (explicit Pi state or sidebar-observed `working → idle` transition)
+- bold green `●`: completed while not being viewed; unread (Pi state)
 - bold dim `○`: live and idle/read
 - dim `·`: dormant; pressing Enter reopens it
 - all status glyphs share one fixed right-aligned column with a three-cell right margin; current selection is indicated only by its gray row background
 
-Selecting a session marks it read. An unread session also clears automatically when its Pi pane becomes the active tmux client pane.
+Selecting a session marks it read after tmux successfully shows its Pi pane. A delayed Pi registration rechecks client focus before publishing `unread=true`, so an already-read row does not briefly reappear unread. An unread session also clears automatically when its Pi pane becomes the active tmux client pane.
 
 ## Performance and lifetime
 
