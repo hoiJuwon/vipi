@@ -490,10 +490,6 @@ local function entry_under_cursor()
   return line_to_entry[vim.api.nvim_win_get_cursor(0)[1]]
 end
 
-local function target_coordinates(entry)
-  return string.format("%s:%s", entry.tmuxSession, entry.tmuxWindow)
-end
-
 local function mark_read(entry)
   local all_entries = read_registry()
   for _, candidate in ipairs(all_entries) do
@@ -504,8 +500,9 @@ local function mark_read(entry)
 end
 
 local function ensure_tree_for(entry)
-  local target_window = target_coordinates(entry)
-  local _, panes = tmux({ "list-panes", "-t", target_window, "-F", "#{pane_id}\t#{@pi_session_tree}" })
+  -- Session names in the registry may point to a detached disposable view.
+  -- The live Pi pane ID is the stable window target.
+  local _, panes = tmux({ "list-panes", "-t", entry.tmuxPaneId, "-F", "#{pane_id}\t#{@pi_session_tree}" })
   for line in panes:gmatch("[^\r\n]+") do
     local pane, marker = line:match("^(%%[^\t]+)\t(.*)$")
     if marker == "1" then
@@ -644,13 +641,43 @@ local function move_tree_and_focus(entry, clicked_client)
     return
   end
 
-  local target_window = target_coordinates(entry)
+  local _, target_window = tmux({ "display-message", "-p", "-t", entry.tmuxPaneId, "#{session_name}:#{window_index}" })
+  target_window = vim.trim(target_window)
   if not ensure_tree_for(entry) then return end
 
   local client = clicked_client
+  local isolated_session
+  local target_id
   if client then
-    local _, attached = tmux({ "list-clients", "-F", "#{client_tty}\t#{pane_id}" })
-    if not attached:find(client .. "\t" .. tree_pane, 1, true) then return end
+    local _, attached = tmux({ "list-clients", "-F", "#{client_tty}\t#{session_name}\t#{session_attached}\t#{pane_id}" })
+    local source_session, attached_count
+    for line in attached:gmatch("[^\r\n]+") do
+      local tty, session, count, pane = line:match("^([^\t]+)\t([^\t]+)\t(%d+)\t(%%[^\t]+)$")
+      if tty == client and pane == tree_pane then
+        source_session, attached_count = session, tonumber(count)
+        break
+      end
+    end
+    if not source_session then return end
+    local _, id = tmux({ "display-message", "-p", "-t", entry.tmuxPaneId, "#{window_id}" })
+    target_id = vim.trim(id)
+    local _, windows = tmux({ "list-windows", "-t", source_session, "-F", "#{window_id}\t#{window_index}" })
+    local target_index
+    for line in windows:gmatch("[^\r\n]+") do
+      local id, index = line:match("^([@%d]+)\t(%d+)$")
+      if id == target_id then target_index = index break end
+    end
+    if target_index then
+      target_window = source_session .. ":" .. target_index
+      if attached_count > 1 then
+        -- A tmux session has ONE current window for every attached client.
+        -- Grouped sessions share Pi panes but keep each client's window selection.
+        isolated_session = string.format("vipi-view-%d-%d", vim.fn.getpid(), uv.hrtime())
+        local code, _, error = tmux({ "new-session", "-d", "-t", source_session, "-s", isolated_session })
+        if code ~= 0 then report_error(error); return end
+        target_window = isolated_session .. ":" .. target_index
+      end
+    end
   else
     -- Keyboard navigation has no tmux origin marker; keep its old behavior.
     local _, inferred = tmux({ "display-message", "-p", "-t", tree_pane, "#{client_tty}" })
@@ -662,7 +689,13 @@ local function move_tree_and_focus(entry, clicked_client)
   -- Hidden windows remember the tree pane as active after the last click. Select
   -- the Pi pane before exposing the window, otherwise tmux paints tree → Pi.
   tmux({ "select-pane", "-t", entry.tmuxPaneId })
-  tmux(switch_args)
+  local code, _, error = tmux(switch_args)
+  if isolated_session then
+    if code ~= 0 then tmux({ "kill-session", "-t", isolated_session }); report_error(error); return end
+    tmux({ "set-option", "-t", isolated_session, "destroy-unattached", "on" })
+    -- The old client stays on the source window. Restore its Pi focus.
+    if owner ~= "" then tmux({ "select-pane", "-t", owner }) end
+  end
 end
 
 local function open_selected(clicked_client)
@@ -961,7 +994,7 @@ end
 
 local snapshot_format = table.concat({
   "#{pane_id}", "#{pane_pid}", "#{pane_dead}", "#{window_active}", "#{session_attached}",
-  "#{pane_active}", "#{@pi_session_tree_owner}", "#{@pi_permission_waiting}", "#{@pi_session_tree_navigation}",
+  "#{pane_active}", "#{@pi_session_tree_owner}", "#{@pi_permission_waiting}", "#{@pi_session_tree_navigation}", "#{window_id}",
 }, "\t")
 local ready = false
 local function poll()
@@ -975,23 +1008,38 @@ local function poll()
       poll_job = nil
       if not running() or busy then return end
       if result.code ~= 0 then return end -- transient tmux timeout: retain last good screen
-      local live, waiting = {}, {}
-      local self_found = false
+      local live, waiting, window_panes = {}, {}, {}
+      local self_found, self_visible, self_window = false, false, nil
       for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local fields = vim.split(line, "\t", { plain = true })
         local pane = fields[1]
+        local window = fields[10]
+        if window then
+          window_panes[window] = window_panes[window] or {}
+          window_panes[window][pane] = true
+        end
         if fields[3] == "0" then live[pane] = true end
         local publisher = (fields[8] or ""):match("^mcp:(%d+)$")
         if publisher and process_alive(publisher) then waiting[pane] = true end
         if pane == tree_pane then
           self_found = true
+          self_window = window
           cached_owner = fields[7] or ""
           cached_tree_active = fields[6] == "1"
-          cached_visible = fields[4] == "1" and (tonumber(fields[5]) or 0) > 0
+          -- Grouped sessions list the same pane once per session. Visibility
+          -- is true if ANY attached client is viewing this shared window.
+          self_visible = self_visible or (fields[4] == "1" and (tonumber(fields[5]) or 0) > 0)
           cached_navigation = fields[9] or ""
         end
       end
       if not self_found then stop(); vim.cmd("qa!"); return end
+      -- A tree left as the only pane after its Pi owner disappeared is not a
+      -- session. Do not keep a full-width stale tree window in the tab list.
+      if ready and (cached_owner == "" or not live[cached_owner])
+          and self_window and vim.tbl_count(window_panes[self_window] or {}) == 1 then
+        stop(); vim.cmd("qa!"); return
+      end
+      cached_visible = self_visible
       cached_live_panes, cached_permission_panes = live, waiting
       if not cached_visible and ready then return end
       refreshing = true

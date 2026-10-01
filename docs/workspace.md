@@ -19,7 +19,7 @@ vipi start --session base --detached
 vipi install-autostart
 ```
 
-이후 `vipi start`는 저장된 `base`로 돌아간다. 기존 pane을 이동·종료하지 않는다. 신규 머신 기본 tmux 이름은 `vipi`다. tmux 안에서는 `switch-client`, 밖에서는 `attach-session`을 사용한다. 세션 이름은 영문·숫자·`_`·`-`만 허용한다.
+이후 `vipi start`는 저장된 `base`로 돌아간다. 기존 pane을 이동·종료하지 않는다. 신규 머신 기본 tmux 이름은 `vipi`다. tmux 안에서는 `switch-client`, 밖에서는 `attach-session`을 사용한다. 세션 이름은 영문·숫자·`_`·`-`만 허용한다. 두 클라이언트가 한 tmux 세션에 붙으면 tree 클릭 시 각 클라이언트에 독립 창 선택을 위한 임시 grouped session을 만들고, 마지막으로 활동한 클라이언트의 선택 창을 workspace snapshot에 기록한다.
 
 ## 보존되는 것
 

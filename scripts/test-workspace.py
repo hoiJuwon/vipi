@@ -38,6 +38,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-workspace-test-') as directory:
     assert not m.header(str(home / 'missing'))
     data = {'version': 1, 'session': 'test', 'selected': records[1]['id'], 'sessions': records}
     m.atomic_json(m.MANIFEST, data)
+    client_control = None
     try:
         # Override real user's tmux.conf for this isolated server only.
         subprocess.run(['tmux', '-L', m.SOCKET, '-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', 'sleep 86400'], check=True)
@@ -53,6 +54,16 @@ with tempfile.TemporaryDirectory(prefix='vipi-workspace-test-') as directory:
         assert m.checkpoint() == saved
         assert m.MANIFEST.stat().st_mtime_ns == saved_mtime, 'unchanged workspace must not rewrite/fsync'
         assert m.MANIFEST.stat().st_mode & 0o777 == 0o600
+        client_control = subprocess.Popen(['tmux', '-L', m.SOCKET, '-C', 'attach-session', '-t', 'test'],
+                                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        m.tmux('new-session', '-d', '-t', 'test', '-s', 'test-view')
+        second = next(p for p in first if p['@vipi_restore_id'] == records[1]['id'])['window_index']
+        first_window = next(p for p in first if p['@vipi_restore_id'] == records[0]['id'])['window_index']
+        m.tmux('switch-client', '-t', f'test-view:{second}')
+        m.tmux('select-window', '-t', f'test:{first_window}')
+        assert m.checkpoint()['selected'] == records[1]['id'], 'grouped active client must win over base window'
+        m.tmux('kill-session', '-t', 'test-view')
+        client_control.terminate(); client_control.wait(timeout=5); client_control = None
         m.tmux('kill-server')  # Never touches the real/default tmux server.
         assert m.checkpoint() == saved, 'server loss must not erase snapshot'
         subprocess.run(['tmux', '-L', m.SOCKET, '-f', '/dev/null', 'new-session', '-d', '-s', 'fixture', 'sleep 86400'], check=True)
@@ -69,3 +80,5 @@ with tempfile.TemporaryDirectory(prefix='vipi-workspace-test-') as directory:
         print('PASS: quoting, scheduler excluded, 0600, attach idempotence, selected window, server-loss restore, partial recovery')
     finally:
         m.tmux('kill-server', check=False)
+        if client_control:
+            client_control.terminate(); client_control.wait(timeout=5)

@@ -266,6 +266,8 @@ export default function sessionTree(pi: ExtensionAPI) {
       const result = await run("tmux", displayArgs);
       const coordinates = parseDisplayMessage(result.stdout);
       if (!coordinates) return;
+      const group = await run("tmux", ["display-message", "-p", "-t", coordinates.tmuxPaneId, "#{session_group}"]);
+      if (group.code === 0 && group.stdout.trim()) coordinates.tmuxSession = group.stdout.trim();
 
       const entries = loadRegistry(REGISTRY_PATH);
       const sessionId = ctx.sessionManager.getSessionId();
@@ -587,7 +589,8 @@ export default function sessionTree(pi: ExtensionAPI) {
       // The hidden target may still have its tree pane active from the last click.
       // Select Pi before exposing the window to avoid a visible tree → Pi flash.
       await run("tmux", ["select-pane", "-t", target.tmuxPaneId]);
-      await run("tmux", ["switch-client", "-t", `${target.tmuxSession}:${target.tmuxWindow}`]);
+      const location = await run("tmux", ["display-message", "-p", "-t", target.tmuxPaneId, "#{session_name}:#{window_index}"]);
+      if (location.code === 0) await run("tmux", ["switch-client", "-t", location.stdout.trim()]);
     })();
   });
 

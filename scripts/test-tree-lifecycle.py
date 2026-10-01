@@ -148,9 +148,9 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                                       if line.startswith('bind-key -T root MouseDown1Pane ')) + '\n')
         tmux('source-file', mouse_binding)
         tmux('set-option', '-g', 'mouse', 'on')
-        for _ in range(2):
+        for width in (100, 140):
             master, slave = pty.openpty()
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 140, 0, 0))
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, width, 0, 0))
             process = subprocess.Popen([TMUX, '-L', SOCKET, 'attach-session', '-t', 'fixture'],
                                        stdin=slave, stdout=slave, stderr=slave,
                                        env={**os.environ, 'TERM': 'xterm-256color'}, start_new_session=True)
@@ -159,19 +159,59 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         wait(lambda: all(tty in tmux('list-clients', '-F', '#{client_tty}').splitlines()
                          for _, _, _, tty in mouse_clients))
         assert tmux('display-message', '-p', '-t', pane, '#{client_tty}') != mouse_clients[0][3], 'fixture must reproduce wrong-client inference'
+        target_id = tmux('display-message', '-p', '-t', target_owner, '#{window_id}')
         calls.write_text('')
         os.write(mouse_clients[0][1], f'\x1b[<0;3;{target_line}M'.encode())
         wait(lambda: any('switch-client -c ' + mouse_clients[0][3] in line
                          for line in calls.read_text().splitlines()), timeout=5)
         assert tmux('show-options', '-p', '-v', '-t', pane, '@pi_session_tree_click_client') == mouse_clients[0][3]
-        tmux('select-window', '-t', owner)
+        def views():
+            return {tty: (session, window) for tty, session, window, _ in
+                    (line.split('|') for line in tmux('list-clients', '-F', '#{client_tty}|#{client_session}|#{window_id}|').splitlines())}
+        clicked_tty, other_tty = mouse_clients[0][3], mouse_clients[1][3]
+        owner_window = tmux('display-message', '-p', '-t', owner, '#{window_id}')
+        wait(lambda: views().get(clicked_tty, ('fixture', ''))[0] != 'fixture')
+        isolated = views()[clicked_tty][0]
+        assert views()[clicked_tty][1] == target_id, views()
+        assert views()[other_tty] == ('fixture', owner_window), views()
+        assert not any('resize-window' in line for line in calls.read_text().splitlines()), 'navigation must not resize Pi windows'
+        assert tmux('show-options', '-v', '-t', isolated, 'destroy-unattached') == 'on'
+        # The source tree is visible in base but hidden in the grouped session.
+        # Duplicate list-panes rows must not let the hidden copy suppress redraw.
+        data['entries'][0]['status'] = 'working'
+        registry.write_text(json.dumps(data))
+        wait(lambda: any(icon in lua('table.concat(vim.api.nvim_buf_get_lines(0,0,-1,false),"\\n")')
+                         for icon in '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'))
+        data['entries'][0]['status'] = 'idle'
+        registry.write_text(json.dumps(data))
+        # Other client's navigation must no longer bounce the clicking client back.
+        tmux('select-window', '-t', f'fixture:{target_window}')
+        assert views()[clicked_tty] == (isolated, target_id), views()
+        tmux('select-window', '-t', 'fixture:' + tmux('display-message', '-p', '-t', owner, '#{window_index}'))
+        assert views()[clicked_tty] == (isolated, target_id), views()
+        source_line = int(_target_lua('(function() for i,line in ipairs(vim.api.nvim_buf_get_lines(0,0,-1,false)) do if line:find("검증",1,true) then return i end end return 0 end)()'))
+        assert source_line > 0
+        os.write(mouse_clients[0][1], f'\x1b[<0;3;{source_line}M'.encode())
+        wait(lambda: views().get(clicked_tty) == (isolated, owner_window))
+        assert set(tmux('list-sessions', '-F', '#{session_name}').splitlines()) == {'fixture', isolated}, 'reuse existing client group'
+        assert views()[other_tty] == ('fixture', owner_window), views()
+        # The registry can contain a disposable view which has already exited.
+        # Resolve by Pi pane ID or another click would split another tree pane.
+        data['entries'][-1]['tmuxSession'] = 'expired-view'
+        data['entries'][-1]['tmuxWindow'] = '99'
+        registry.write_text(json.dumps(data))
+        os.write(mouse_clients[0][1], f'\x1b[<0;3;{target_line}M'.encode())
+        wait(lambda: views().get(clicked_tty) == (isolated, target_id))
+        assert len(tmux('list-panes', '-t', target_owner, '-F', '#{pane_id}').splitlines()) == 2, 'tree panes multiplied after a stale registry target'
         tmux('select-pane', '-t', pane)
         for process, master, slave, _ in mouse_clients:
             process.terminate(); process.wait(timeout=5)
             os.close(master); os.close(slave)
         mouse_clients.clear()
-        tmux('kill-pane', '-t', target_tree)
-        wait(lambda: not alive(target_worker))
+        wait(lambda: tmux('list-sessions', '-F', '#{session_name}').splitlines() == ['fixture'])
+        tmux('kill-pane', '-t', target_owner)
+        wait(lambda: not alive(target_worker), timeout=8)
+        assert target_tree not in tmux('list-panes', '-a', '-F', '#{pane_id}').splitlines(), 'orphan-only tree window must exit'
         data['entries'].pop()
         registry.write_text(json.dumps(data))
 
@@ -216,7 +256,7 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
                 tmux('kill-server')
             wait(lambda: not alive(pid))
         print(f'PASS: idle redraw=0, read-only registry, new unsaved row, permission PID, rename/input safety, '
-              f'target Pi selected before exposure, mouse origin preserved across clients, visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
+              f'target Pi selected before exposure, independent client windows and group cleanup, visible tmux calls={visible_calls}/2s, hidden={hidden_calls}/3s; q/kill-pane/render-error+kill/SIGKILL/server loss leave no workers')
     finally:
         tmux('kill-server', check=False)
         if client:

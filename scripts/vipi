@@ -68,7 +68,7 @@ def panes():
     keys = ['session_name', 'window_id', 'window_index', 'pane_id', 'pane_pid',
             'pane_current_command', 'pane_current_path', 'window_active', 'pane_active',
             'window_width', 'window_height', '@pi_session_tree', '@pi_session_tree_root',
-            '@vipi_session_file', '@vipi_restore_id']
+            '@pi_session_tree_owner', '@vipi_session_file', '@vipi_restore_id']
     fmt = '\t'.join('#{' + k + '}' for k in keys)
     result = tmux('list-panes', '-a', '-F', fmt, check=False)
     return [dict(zip(keys, line.split('\t'))) for line in result.stdout.splitlines()]
@@ -145,7 +145,30 @@ def checkpoint(session=None):
         return old  # Never erase the last workspace during shutdown / server absence.
     if tmux('show-options', '-v', '-t', session, '@vipi_restoring', check=False).stdout.strip() == '1':
         return old
-    records, warnings, selected = collect(live, registry(), session, old.get('sessions', []))
+    entries = registry()
+    records, warnings, selected = collect(live, entries, session, old.get('sessions', []))
+    # Grouped client sessions share Pi panes, but keep their current windows
+    # independently. Save the most recently active client's selection.
+    group = tmux('display-message', '-p', '-t', session, '#{session_group}', check=False).stdout.strip() or session
+    clients = tmux('list-clients', '-F', '#{client_activity}\t#{client_session}\t#{session_group}\t#{pane_id}', check=False).stdout
+    by_pane = {p['pane_id']: p for p in live}
+    candidates = []
+    for line in clients.splitlines():
+        parts = line.split('\t')
+        if len(parts) != 4 or (parts[2] or parts[1]) != group:
+            continue
+        pane = by_pane.get(parts[3])
+        if pane and pane['@pi_session_tree'] == '1':
+            pane = by_pane.get(pane['@pi_session_tree_owner'])
+        if not pane:
+            continue
+        identities = {pane['@vipi_restore_id']}
+        identities.update(e['piSessionId'] for e in entries if e.get('tmuxPaneId') == pane['pane_id'])
+        record = next((r['id'] for r in records if r['id'] in identities), None)
+        if record:
+            candidates.append((int(parts[0] or 0), parts[1] != session, record))
+    if candidates:
+        selected = max(candidates)[2]
     if not records:
         return old  # Startup registration may lag; preserve the known-good snapshot.
     # Keep unavailable records across partial restoration without freezing future saves.
