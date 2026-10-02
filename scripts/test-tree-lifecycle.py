@@ -196,6 +196,9 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         registry.write_text(json.dumps(data))
         wait(lambda: any(icon in lua('table.concat(vim.api.nvim_buf_get_lines(0,0,-1,false),"\\n")')
                          for icon in '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'))
+        spinner_tick = int(lua('vim.api.nvim_buf_get_changedtick(0)'))
+        time.sleep(2)
+        assert int(lua('vim.api.nvim_buf_get_changedtick(0)')) - spinner_tick <= 5, 'spinner refresh must not flash every poll'
         data['entries'][0]['status'] = 'idle'
         registry.write_text(json.dumps(data))
         # Other client's navigation must no longer bounce the clicking client back.
@@ -246,6 +249,23 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         assert lua('vim.api.nvim_buf_get_changedtick(0)') == tick
         tmux('select-window', '-t', owner)
         time.sleep(2.2)
+        old_tree_pid = pid
+        next_server = home / ('rpc-respawn-' + uuid.uuid4().hex[:8])
+        restart_args = ['respawn-pane', '-k', '-t', pane, '-c', home]
+        for key, value in {'PI_SESSION_TREE_ROOT': str(home), 'PI_SESSION_TREE_REGISTRY': str(registry),
+                           'PI_SESSION_TREE_CATALOG': str(catalog), 'PI_SESSION_TREE_WORKSPACES': str(workspaces)}.items():
+            restart_args += ['-e', key + '=' + value]
+        tmux('set-option', '-p', '-u', '-t', pane, '@pi_session_tree_ready')
+        tmux(*restart_args, 'exec ' + shlex.join([NVIM, '--listen', str(next_server), '--clean', '-n', '-u',
+                                                   str(ROOT / 'pi/packages/pi-session-tree/tree.lua')]))
+        wait(lambda: next_server.exists() and tmux('show-options', '-p', '-v', '-t', pane,
+                                                    '@pi_session_tree_ready', check=False) == '1')
+        wait(lambda: not alive(old_tree_pid))
+        pid = int(subprocess.check_output([NVIM, '--server', str(next_server), '--remote-expr',
+                                           'getpid()'], text=True, timeout=5).strip())
+        workers.append(pid)
+        assert tmux('display-message', '-p', '-t', pane, '#{pane_width}') == '45'
+        assert tmux('display-message', '-p', '-t', owner, '#{pane_pid}') == str(owner_pid)
         tmux('select-pane', '-t', pane)
         tmux('send-keys', '-t', pane, 'q')
         wait(lambda: not alive(pid))

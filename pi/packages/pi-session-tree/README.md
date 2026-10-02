@@ -58,7 +58,7 @@ The initially inferred topic remains fixed during automatic naming and status re
 ## Status
 
 - bold red `●`: the MCP adapter has entered a real tool-approval or elicitation lifecycle and is awaiting user interaction; it publishes a pane-local `@pi_permission_waiting=mcp:<publisher-pid>` marker before opening the UI and clears it in `finally` after accept/decline/cancel/error. Input, agent, tool, session-start, and session-shutdown boundaries also force-clear orphaned markers, and the tree accepts a marker only while its publisher process is alive. The tree never scans rendered text, so messages containing button labels cannot trigger this state. All pane options are read in one cached `list-panes` snapshot rather than one tmux process per live session, preventing session-count-dependent input stalls. This takes priority over the spinner.
-- bold yellow original Braille spinner (`⠋ ⠙ ⠹ …`): Pi is generating/running tools
+- bold yellow original Braille spinner (`⠋ ⠙ ⠹ …`): Pi is generating/running tools. Frames advance at most every 500ms; the 250ms status poll still notices permission and completion promptly.
 - bold green `●`: completed while not being viewed; unread (Pi state)
 - bold dim `○`: live and idle/read
 - dim `·`: dormant; pressing Enter reopens it

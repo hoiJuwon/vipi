@@ -250,7 +250,7 @@ local function status_for(entry, owner)
   if not entry.live then return "·", "PiTreeIdle" end
   if pane_waits_for_permission(entry) then return "●", "PiTreePermission" end
   if entry.status == "working" then
-    local index = math.floor(uv.now() / 120) % #spinner_frames + 1
+    local index = math.floor(uv.now() / 500) % #spinner_frames + 1
     return spinner_frames[index], "PiTreeWorking"
   end
   if entry.unread then return "●", "PiTreeUnread" end
