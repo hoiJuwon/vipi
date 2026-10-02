@@ -27,7 +27,7 @@ gpt 6 astra High           second@example.com | Usage 90% Left
                               third@example.com | Usage 75% Left
 ```
 
-왼쪽은 Vim 상태와 그 아래 현재 모델·thinking 강도, 오른쪽 세 줄은 계정별 이메일과 **남은 사용량**이다. 현재 Pi 프로세스가 마지막으로 요청을 보낸 계정은 더 밝게 표시한다. 로그인 전 슬롯은 `account2 not connected` 또는 `account3 not connected`로 표시한다. 이메일은 OAuth access token의 profile claim에서 읽으며 사용량 캐시에 저장하지 않는다. 이메일을 얻지 못하면 `account1` / `account2` / `account3`로 표시한다. footer는 주간 잔여량을 우선 표시하고 주간 창이 없으면 가장 긴 창을 사용한다. `~`는 오래되었거나 조회에 실패한 마지막 값이고, reset 시각이 지났으면 `checking...`으로 표시한다. `/codex-accounts`는 새 조회를 시도하고 제공된 5시간·주간 창의 잔여량과 초기화 시각도 보여준다(명령 출력의 `*`가 현재 계정). 잔여량은 실시간 보장이 아니라 최근 서버 관측값이다.
+왼쪽은 Vim 상태와 그 아래 현재 모델·thinking 강도, 오른쪽 세 줄은 계정별 이메일과 **남은 사용량**이다. 현재 Pi 프로세스가 마지막으로 요청을 보낸 계정은 더 밝게 표시한다. 로그인 전 슬롯은 `account2 not connected` 또는 `account3 not connected`로 표시한다. 이메일은 OAuth access token의 profile claim에서 읽으며 사용량 캐시에 저장하지 않는다. 이메일을 얻지 못하면 `account1` / `account2` / `account3`로 표시한다. footer는 **포함된** 주간 한도의 잔여량을 우선 표시하고 주간 창이 없으면 가장 긴 창을 사용한다. `0% Left`여도 크레딧으로 요청이 허용될 수 있으며, 크레딧 잔액은 이 footer에 표시하지 않는다. `~`는 오래되었거나 조회에 실패한 마지막 값이고, reset 시각이 지났으면 `checking...`으로 표시한다. `/codex-accounts`는 새 조회를 시도하고 제공된 5시간·주간 창의 잔여량과 초기화 시각도 보여준다(명령 출력의 `*`가 현재 계정). 잔여량은 실시간 보장이 아니라 최근 서버 관측값이다.
 
 ## 우선 계정 변경
 
@@ -41,8 +41,8 @@ gpt 6 astra High           second@example.com | Usage 90% Left
 
 ## 전환 규칙
 
-1. 현재 계정을 유지한다. 사용량이 확실히 소진된 경우에만 다른 연결 계정을 선택한다.
-2. HTTP 429와 함께 한도 헤더 또는 사용량 조회에서 **실제 소진이 확인**되면, 아직 start/content/tool-call 이벤트를 하나도 전달하지 않은 요청만 다른 계정으로 한 번 재시도한다.
+1. 저장된 우선 계정(또는 현재 자동 전환된 계정)부터 요청한다. 포함된 주간 한도가 100%여도 크레딧으로 계속 허용될 수 있으므로 연결 계정을 요청 전에 건너뛰지 않는다. 추가 크레딧 구매는 이 코드가 수행하지 않는다.
+2. HTTP 429 뒤 사용량 API에서 계정 요청 차단이 **확인**되면, 아직 start/content/tool-call 이벤트를 하나도 전달하지 않은 요청만 다음 연결 계정으로 재시도한다. 주간 100% 헤더만으로는 크레딧 차단을 판단하지 않는다.
 3. 보통의 속도 제한, 네트워크 오류, 인증 오류, 정책 거절, 모델 미지원은 계정 전환 사유가 아니다. 취소 요청도 재시도하지 않는다.
 4. 이미 streaming이 시작됐으면 계정을 바꿔 처음부터 생성하지 않는다. Pi 도구/명령/배포는 이 확장이 실행하거나 재실행하지 않는다.
 5. 세 계정 모두 소진되면 오류를 표시하고 멈춘다. 무한 round-robin하지 않는다.
@@ -50,7 +50,7 @@ gpt 6 astra High           second@example.com | Usage 90% Left
 
 계정이 바뀌어도 모델·thinking·대화는 유지한다. 모델 요청은 SSE로 전송한다. 계정별 request session ID와 assistant provider provenance를 분리해 native Pi의 cross-provider 메시지 변환이 다른 계정의 encrypted reasoning signature를 그대로 재전송하지 않도록 한다. 대화 내용은 선택된 세 계정 각각으로 전송될 수 있으므로, 모두 본인이 해당 대화를 처리하도록 승인한 계정이어야 한다.
 
-Spark의 별도 quota를 일반 Codex quota와 혼동하지 않도록 Spark에는 일반 사용량 기반 사전 전환을 적용하지 않는다. 해당 요청의 quota 헤더가 확인되는 경우에만 전환한다. 다른 특수 모델의 별도 한도까지 지원한다고 가정하지 않는다.
+Spark의 별도 quota를 일반 Codex quota와 혼동하지 않도록 Spark에는 일반 사용량 조회 기반 전환을 적용하지 않는다. 해당 요청의 quota 헤더가 확인되는 경우에만 전환한다. 다른 특수 모델의 별도 한도까지 지원한다고 가정하지 않는다.
 
 ## 출력 전 오류 자동 재시도
 
@@ -84,6 +84,6 @@ python3 scripts/test-workspace-tui.py
 python3 scripts/test-workspace-tui.py --legacy-cli
 ```
 
-TUI 테스트는 일반 실행과 구형 CLI 확장 목록 양쪽에서 연속 두 번 `/reload`해도 세 계정 행이 유지되는지 확인한다. 오류 테스트는 Bad Request, Daybreak, context window, 인증·접근·rate-limit 및 stream 전 예외의 같은 계정 재시도, 3회 총 시도 제한, 중간 error 차단, 원래 context 유지, 계정 3 직접 호출, 부분 출력·취소 시 재실행 차단을 검증한다. 오프라인 테스트는 소진/초기화/오래된 캐시, quota에서만 세 계정 순차 전환, streaming 후·취소 시 재실행 금지, 세 토큰 분리, 중복 계정 거부, 세 계정 footer, thinking 보존을 검증한다. 실제 세 계정 로그인과 한도 소진 E2E는 별도로 확인해야 한다. 한도를 테스트하려고 실제 사용량을 소진하지 않는다.
+TUI 테스트는 일반 실행과 구형 CLI 확장 목록 양쪽에서 연속 두 번 `/reload`해도 세 계정 행이 유지되는지 확인한다. 오류 테스트는 Bad Request, Daybreak, context window, 인증·접근·rate-limit 및 stream 전 예외의 같은 계정 재시도, 3회 총 시도 제한, 중간 error 차단, 원래 context 유지, 계정 3 직접 호출, 부분 출력·취소 시 재실행 차단을 검증한다. 오프라인 테스트는 주간 100%에서 크레딧 허용/차단·429 확인, quota에서만 세 계정 순차 전환, streaming 후·취소 시 재실행 금지, 세 토큰 분리, 중복 계정 거부, 세 계정 footer, thinking 보존을 검증한다. 실제 세 계정 로그인과 한도 소진 E2E는 별도로 확인해야 한다. 한도를 테스트하려고 실제 사용량을 소진하지 않는다.
 
 해제하려면 settings의 `packages/pi-codex-accounts` 항목을 제거하고 새 Pi를 시작한다. 기본 Codex 계정 1과 legacy footer로 돌아간다. 계정 2·3 로그인을 제거하려면 확장이 로드된 상태에서 먼저 `/logout`을 사용한다. 인증·사용량 캐시는 공개 repo에 커밋하지 않는다.

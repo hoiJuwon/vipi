@@ -80,13 +80,11 @@ export function usageFromHeaders(raw: Record<string, string>, now = Date.now()):
       windows.push({ used: Math.max(0, Math.min(100, used)), minutes, reset: Number.isFinite(reset) ? reset : undefined });
     }
   }
-  return windows.length ? { checkedAt: now, windows, limited: windows.some(w => w.used >= 100) } : undefined;
+  // 100% of the included window can still be served using credits.
+  return windows.length ? { checkedAt: now, windows, limited: false } : undefined;
 }
 export function exhausted(usage: Usage | undefined, now = Date.now()): boolean {
-  if (!usage || usage.error) return false;
-  const full = usage.windows.filter(w => w.used >= 100);
-  if (full.length) return full.some(w => w.reset ? w.reset * 1000 > now : now - usage.checkedAt < POLL_MS);
-  return usage.limited && now - usage.checkedAt < POLL_MS;
+  return Boolean(usage && !usage.error && usage.limited && now - usage.checkedAt < POLL_MS);
 }
 export function formatAccounts(accounts: Account[], now = Date.now()): string {
   return accounts.map(a => {
@@ -118,7 +116,7 @@ export function routeStream(
   const output = createAssistantMessageEventStream();
   void (async () => {
     try {
-      if (!candidates.length) throw new Error("Codex 계정 사용량이 모두 소진됐습니다. /codex-accounts에서 초기화 시각을 확인하세요.");
+      if (!candidates.length) throw new Error("연결된 Codex 계정이 없습니다. /codex-accounts에서 로그인을 확인하세요.");
       let preOutputRetries = 0;
       for (let index = 0; index < candidates.length;) {
         if (signal?.aborted) throw new Error("Request was aborted");
@@ -310,8 +308,10 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
     }
     const requestRevision = preference.revision;
     const generalQuota = !model.id.toLowerCase().includes("spark");
+    // Never skip a connected account solely because its included weekly window
+    // reads 100%: the backend may serve the request using purchased credits.
     const candidates = [active, ...ACCOUNT_IDS.map((_id, index) => index).filter(index => index !== active)]
-      .filter(index => identity(index) && (!generalQuota || !exhausted(readUsage(index))));
+      .filter(index => identity(index));
     return routeStream(model, candidates, async index => {
       const auth = await runtime.getAuth(ACCOUNT_IDS[index], { signal: options.signal });
       if (!auth?.auth.apiKey) throw new Error(`Codex 계정 ${index + 1} 로그인이 필요합니다.`);
@@ -330,7 +330,7 @@ export async function installCodexAccounts(pi: ExtensionAPI): Promise<() => void
           publish();
           await options.onResponse?.(response, responseModel);
           if (response.status === 429) {
-            quota = exhausted(usage) || (generalQuota && exhausted(await refreshUsage(index, true, options.signal)));
+            quota = generalQuota ? exhausted(await refreshUsage(index, true, options.signal)) : Boolean(usage?.windows.some(w => w.used >= 100));
             if (quota) throw new Error(`Codex account ${index + 1} usage limit confirmed`);
           }
         },

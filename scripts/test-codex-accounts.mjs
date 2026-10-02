@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,8 +21,9 @@ try {
   const { ModelRuntime } = await jiti.import('@earendil-works/pi-coding-agent');
   const now = Date.now();
   const headers = { 'x-codex-primary-used-percent': '100', 'x-codex-primary-window-minutes': '300', 'x-codex-primary-reset-at': String(now / 1000 + 60) };
-  assert.ok(mod.exhausted(mod.usageFromHeaders(headers)));
-  assert.equal(mod.exhausted(mod.usageFromHeaders(headers), now + 61000), false);
+  assert.equal(mod.exhausted(mod.usageFromHeaders(headers)), false, '100% included usage is not proof credits are blocked');
+  assert.equal(mod.exhausted(mod.usageFromBody({ rate_limit: { allowed: true, limit_reached: false, primary_window: { used_percent: 100, limit_window_seconds: 604800 } }, credits: { has_credits: true } })), false);
+  assert.equal(mod.exhausted(mod.usageFromBody({ rate_limit: { allowed: false, limit_reached: true, primary_window: { used_percent: 100, limit_window_seconds: 604800 } } })), true);
   assert.equal(mod.usageFromHeaders({ 'x-codex-primary-used-percent': 'oops' }), undefined);
   assert.throws(() => mod.usageFromBody({}), /응답 형식/);
   const usage = mod.usageFromBody({ rate_limit: { allowed: true, limit_reached: false, primary_window: { used_percent: 54, limit_window_seconds: 604800, reset_at: now / 1000 + 86400 } } });
@@ -114,7 +116,7 @@ try {
   const controller = new AbortController(); controller.abort();
   const aborted = mod.routeStream(model, [0, 1], async () => { throw Error('must not call'); }, controller.signal);
   assert.equal((await aborted.result()).stopReason, 'aborted');
-  assert.match((await mod.routeStream(model, [], async () => {}).result()).errorMessage, /모두 소진/);
+  assert.match((await mod.routeStream(model, [], async () => {}).result()).errorMessage, /연결된 Codex 계정이 없습니다/);
 
   // Full extension registration/dispatch against fake native OAuth & transport.
   const token = id => `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: id } })).toString('base64url')}.x`;
@@ -124,8 +126,13 @@ try {
   assert.equal(mod.accountEmail('invalid'), undefined);
   const credentials = Object.fromEntries(mod.ACCOUNT_IDS.map((id, index) => [id, { type: 'oauth', access: token('account-' + index), refresh: 'test-only', expires: now + 999999 }]));
   writeFileSync(join(home, 'auth.json'), JSON.stringify(credentials), { mode: 0o600 });
-  let loginCredential = credentials['openai-codex'], forcedBadRequests = 0;
+  let loginCredential = credentials['openai-codex'], forcedBadRequests = 0, temporary429 = 0, creditsAllowed = false;
   const calls = [], providers = new Map(), hooks = new Map(), commands = new Map(), serviceEvents = new Map(), published = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ rate_limit: {
+    allowed: creditsAllowed, limit_reached: !creditsAllowed,
+    primary_window: { used_percent: 100, limit_window_seconds: 604800, reset_at: now / 1000 + 86400 },
+  }, credits: { has_credits: true, overage_limit_reached: false } }) });
   const native = { id: 'openai-codex', name: 'Native', getModels: () => [model], refreshModels() {}, auth: { oauth: { login: async () => loginCredential } },
     stream(model, context, options) {
       const stream = createAssistantMessageEventStream();
@@ -137,8 +144,13 @@ try {
             await options.onResponse({ status: 400, headers: {} }, model);
             throw new Error('{"detail":"Bad Request"}');
           }
-          if (options.apiKey === credentials['openai-codex'].access) await options.onResponse({ status: 429, headers }, model);
-          else await options.onResponse({ status: 200, headers: { ...headers, 'x-codex-primary-used-percent': '20' } }, model);
+          if (options.apiKey === credentials['openai-codex'].access && temporary429 > 0) {
+            temporary429--;
+            await options.onResponse({ status: 429, headers }, model);
+            throw new Error('temporary 429 with credits still allowed');
+          }
+          if (options.apiKey === credentials['openai-codex'].access && !creditsAllowed) await options.onResponse({ status: 429, headers }, model);
+          else await options.onResponse({ status: 200, headers: { ...headers, 'x-codex-primary-used-percent': options.apiKey === credentials['openai-codex-3'].access ? '100' : '20' } }, model);
           stream.push({ type: 'done', reason: 'stop', message: msg('stop') });
         } catch (error) {
           stream.push({ type: 'error', reason: 'error', error: { ...msg('error'), errorMessage: error.message } });
@@ -198,6 +210,13 @@ try {
     await providers.get('openai-codex').stream(model, context, {}).result();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.apiKey, credentials['openai-codex-3'].access);
+    // Simulate the real state: 100% weekly but credits available. The selected
+    // account must be tried, even when its cached usage came from old headers.
+    writeFileSync(join(home, 'codex-accounts/3.json'), JSON.stringify({ checkedAt: now, windows: [{ used: 100, minutes: 10080, reset: now / 1000 + 86400 }], limited: true,
+      fingerprint: createHash('sha256').update('account-2').digest('hex') }));
+    calls.length = 0;
+    await providers.get('openai-codex').stream(model, context, {}).result();
+    assert.deepEqual(calls.map(c => c.options.apiKey), [credentials['openai-codex-3'].access], '100% weekly must not skip the credit-eligible account');
     // Restored sessions may dispatch directly to the account-3 alias: it needs the same retry wrapper.
     calls.length = 0; forcedBadRequests = 2;
     const aliasResult = await providers.get('openai-codex-3').streamSimple({ ...model, provider: 'openai-codex-3' }, context, { sessionId: 'alias-fixture' }).result();
@@ -215,7 +234,15 @@ try {
     assert.equal(calls.length, 2);
     assert.equal(calls[0].options.apiKey, credentials['openai-codex'].access);
     assert.equal(calls[1].options.apiKey, credentials['openai-codex-2'].access);
-  } finally { ModelRuntime.create = originalCreate; hooks.get('session_shutdown')?.(); }
+    // Even a 429 with a 100% header is not quota exhaustion when the usage
+    // endpoint still allows credit-backed requests: retry the SAME account.
+    creditsAllowed = true; temporary429 = 1;
+    writeFileSync(preferencePath, JSON.stringify({ account: 1, revision: 'credit-allowed-429' }));
+    calls.length = 0;
+    const retry = await providers.get('openai-codex').stream(model, context, {}).result();
+    assert.equal(retry.stopReason, 'stop');
+    assert.deepEqual(calls.map(c => c.options.apiKey), [credentials['openai-codex'].access, credentials['openai-codex'].access]);
+  } finally { globalThis.fetch = originalFetch; ModelRuntime.create = originalCreate; hooks.get('session_shutdown')?.(); }
 
   // Footer must not mutate the user's high thinking setting on session_start.
   const { default: footer } = await jiti.import('../pi/packages/pi-clean-footer/index.ts');
@@ -261,5 +288,5 @@ try {
     await new Promise(resolve => setTimeout(resolve, 550));
     assert.equal(updates.length, count, 'idle must not leave an activity timer running');
   } finally { Date.now = originalNow; activityHooks.get('session_shutdown')({}, ctx); }
-  console.log('PASS: every pre-output non-quota error retries on the same account, bounded exhaustion, no replay/abort retries, alias routing, account/footer/activity regressions');
+  console.log('PASS: credit-eligible weekly 100% account, 429 allowance check, quota failover, bounded same-account retries, alias/footer/activity regressions');
 } finally { rmSync(home, { recursive: true, force: true }); }
