@@ -250,7 +250,7 @@ local function status_for(entry, owner)
   if not entry.live then return "·", "PiTreeIdle" end
   if pane_waits_for_permission(entry) then return "●", "PiTreePermission" end
   if entry.status == "working" then
-    local index = math.floor(uv.now() / 500) % #spinner_frames + 1
+    local index = cached_visible and math.floor(uv.now() / 500) % #spinner_frames + 1 or 1
     return spinner_frames[index], "PiTreeWorking"
   end
   if entry.unread then return "●", "PiTreeUnread" end
@@ -992,6 +992,18 @@ local function process_navigation_request()
   elseif request.direction == -1 then session_tab(-1, count) end
 end
 
+-- Keep hidden windows' saved tmux frame current when the catalog changes.
+-- Otherwise tmux paints deleted rows before the first visible poll can replace them.
+local function data_stamp()
+  local parts = {}
+  for _, path in ipairs({ registry_path, catalog_path, workspace_path }) do
+    local stat = uv.fs_stat(path)
+    parts[#parts + 1] = stat and string.format("%d:%d:%d:%d", stat.ino, stat.size, stat.mtime.sec, stat.mtime.nsec) or "missing"
+  end
+  return table.concat(parts, "|")
+end
+local last_data_stamp = data_stamp()
+
 local snapshot_format = table.concat({
   "#{pane_id}", "#{pane_pid}", "#{pane_dead}", "#{window_active}", "#{session_attached}",
   "#{pane_active}", "#{@pi_session_tree_owner}", "#{@pi_permission_waiting}", "#{@pi_session_tree_navigation}", "#{window_id}",
@@ -1071,7 +1083,14 @@ timer:start(0, 250, function()
   vim.schedule(function()
     scheduled = false
     if not running() then return end
-    local ok, error = pcall(poll)
+    local ok, error = pcall(function()
+      if not busy and not refreshing then
+        local stamp = data_stamp()
+        if not cached_visible and stamp ~= last_data_stamp then refresh() end
+        last_data_stamp = stamp
+      end
+      poll()
+    end)
     if not ok then report_error(error) end
   end)
 end)

@@ -217,7 +217,9 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         data['entries'][-1]['tmuxSession'] = 'expired-view'
         data['entries'][-1]['tmuxWindow'] = '99'
         registry.write_text(json.dumps(data))
-        os.write(mouse_clients[0][1], f'\x1b[<0;3;{target_line}M'.encode())
+        target_screen_line = int(lua(f'vim.fn.screenpos(0,{target_line},1).row'))
+        assert target_screen_line > 0
+        os.write(mouse_clients[0][1], f'\x1b[<0;3;{target_screen_line}M'.encode())
         wait(lambda: views().get(clicked_tty) == (isolated, target_id))
         assert len(tmux('list-panes', '-t', target_owner, '-F', '#{pane_id}').splitlines()) == 2, 'tree panes multiplied after a stale registry target'
         tmux('select-pane', '-t', pane)
@@ -247,6 +249,19 @@ with tempfile.TemporaryDirectory(prefix='vipi-tree-lifecycle-') as directory:
         hidden_calls = len(calls.read_text().splitlines()) - start_calls
         assert hidden_calls <= 2, hidden_calls
         assert lua('vim.api.nvim_buf_get_changedtick(0)') == tick
+        # A hidden window must not paint an old/deleted list on the next visit.
+        dormant_file = home / 'hidden-session.jsonl'
+        dormant_file.write_text('{}\n')
+        data['entries'].append({'piSessionId': 'hidden-fixture', 'name': '개발 / 숨김검증', 'cwd': str(home),
+                                'sessionFile': str(dormant_file), 'tmuxPaneId': 'session:hidden-fixture',
+                                'pid': 0, 'status': 'idle', 'unread': False})
+        registry.write_text(json.dumps(data))
+        wait(lambda: '숨김검증' in lua('table.concat(vim.api.nvim_buf_get_lines(0,0,-1,false),"\\n")'), timeout=1.5)
+        dormant_file.unlink()
+        data['entries'].pop()
+        registry.write_text(json.dumps(data))
+        wait(lambda: '숨김검증' not in lua('table.concat(vim.api.nvim_buf_get_lines(0,0,-1,false),"\\n")'), timeout=1.5)
+        assert '숨김검증' not in tmux('capture-pane', '-p', '-t', pane), 'tmux saved frame still shows deleted rows'
         tmux('select-window', '-t', owner)
         time.sleep(2.2)
         old_tree_pid = pid

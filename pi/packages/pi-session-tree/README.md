@@ -68,7 +68,7 @@ Selecting a session marks it read after tmux successfully shows its Pi pane. A d
 
 ## Performance and lifetime
 
-Periodic refresh is read-only and uses one asynchronous tmux snapshot, at most every 250ms while visible and every 2 seconds while hidden. Hidden trees do not render; unchanged visible output does not rewrite buffer/highlights/cursor. Changed spinner/selection rows are updated individually. Input/rename/confirm actions pause periodic work, pending timer callbacks are coalesced, and only one poll can be in flight.
+Periodic refresh is read-only and uses one asynchronous tmux snapshot, at most every 250ms while visible and every 2 seconds while hidden. Hidden trees update their saved tmux frame when registry/catalog/workspace files change, so deleted rows are gone before switching back; their spinners stay still. Unchanged output does not rewrite buffer/highlights/cursor. Changed spinner/selection rows are updated individually. Input/rename/confirm actions pause periodic work, pending timer callbacks are coalesced, and only one poll can be in flight.
 
 Cleanup is registered before startup IO. A standalone tree window closes when its Pi owner has disappeared. UI detach, buffer wipe, exiting/dying state and normal leave stop the timer, cancel the snapshot process, and reject queued work. A worker whose original TUI parent disappears exits directly (scratch tree only). Background errors do not open hit-enter prompts; inspect `vim.g.pi_tree_last_error` if the tree statusline reports a refresh error.
 
