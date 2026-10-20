@@ -138,6 +138,16 @@ Slack OAuth에서 `User interaction is not allowed`가 나면 로컬 로그인 G
 
 `pi-codex-image-gen@0.1.12`에도 [계정 선택 패치](patches/pi-codex-image-gen-0.1.12.patch)를 적용한다. `sh scripts/patch-imagegen.sh`는 일반 설치본과 복원된 Pi의 임시 npm 설치본을 함께 확인한다. 이미지 도구는 `/codex-accounts use 1|2|3`으로 저장한 우선 계정을 매 호출마다 읽고 해당 OAuth를 사용한다. 미연결 계정·손상된 우선 계정 파일이면 실패하며 1번으로 몰래 전송하지 않는다. 실제 이미지 요청 없이 `node scripts/test-imagegen-account.mjs`로 토큰·계정 헤더를 검증한다. `pi update --all`을 무조건 실행하지 않는다.
 
+### 전화 보고 스킬
+
+`전화로 보고해` 또는 `/skill:phone-report`로 현재 작업을 한국어 전화로 보고한다. [스킬](pi/skills/phone-report/SKILL.md)은 Vox의 `https://claude.tryvox.co`를 이용하며, 명시적 발신 요청에만 실제 전화를 건다. 번호와 통화 토큰은 공개 repo가 아닌 `~/.pi/agent/phone-report/`에만 저장한다.
+
+- 최초 설정: 해당 디렉터리를 0700으로 만들고 `config.json`에 `{"phone":"국내 전화번호"}`를 0600으로 저장한다. 설정된 번호는 다시 묻지 않는다.
+- `scripts/setup.py`가 `pi/skills/phone-report`를 글로벌 스킬 경로에 연결한다. 기존 Pi는 유휴 상태에서 `/reload`, 새 Pi는 시작 시 발견한다.
+- foreground long-poll로 실제 종료 이벤트까지 응답한다. 생성/답변 POST는 자동 재전송하지 않고, 중복 발신 방지 상태를 로컬에 보존한다. 통화 완료 후 토큰은 삭제한다.
+- 번호·짧은 보고 내용이 제3자 서비스로 전달된다. SMS·백그라운드 자동 발신은 구현하지 않았다. 통화 수신만으로 민감한 작업의 추가 권한을 부여하지 않는다.
+- `python3 scripts/test-phone-report.py`: 실제 발신 없이 모의 프로토콜/중복 방지 검사.
+
 ## 4. iOS / 원격 사용
 
 [vipi-ios/README.md](vipi-ios/README.md)를 **전체** 읽고 그 문서의 host 설정, launchd, Tailscale HTTPS, device pairing, APNs, Xcode build 순서를 따른다. 모바일 환경의 단일 기준 문서는 서브모듈 README다.

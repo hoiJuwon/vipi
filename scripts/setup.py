@@ -42,7 +42,7 @@ def install(dest, text=None, source=None):
     else:
         dest.write_text(text)
 
-for folder in ['packages', 'themes', 'response-styles']:
+for folder in ['packages', 'themes', 'response-styles', 'skills']:
     for source in (ROOT / 'pi' / folder).iterdir():
         install(agent / folder / source.name, source=source)
 install(home / '.local/bin/vipi', source=ROOT / 'scripts/vipi')

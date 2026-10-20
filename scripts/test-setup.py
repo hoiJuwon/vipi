@@ -16,6 +16,8 @@ with tempfile.TemporaryDirectory(prefix='vipi-setup-test-') as directory:
     assert settings['defaultModel'] == 'gpt-6-sol'
     assert len(settings['packages']) == len(set(settings['packages']))
     assert (home / '.pi/agent/packages/pi-vim-local').is_symlink()
+    assert (home / '.pi/agent/skills/phone-report').is_symlink()
+    assert not (home / '.pi/agent/phone-report/config.json').exists(), 'phone number must stay machine-local'
     assert str(home) in (home / '.tmux.conf').read_text()
     assert not (home / '.config/mcp/mcp.json').exists()
     assert list((home / '.local/state/vipi/backups').glob('*/.tmux.conf'))
